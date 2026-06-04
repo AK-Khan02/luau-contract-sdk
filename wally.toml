@@ -1,0 +1,20 @@
+[package]
+name = "luau-contract-sdk/core"
+version = "0.5.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+description = "Generic contract engine primitives for Luau and Roblox game systems."
+license = "MIT"
+private = true
+
+include = [
+	"src",
+	"README.md",
+	"docs",
+	"examples",
+	"plugin",
+]
+
+exclude = [
+	"tests",
+]

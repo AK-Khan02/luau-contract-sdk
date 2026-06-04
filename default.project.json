@@ -1,0 +1,11 @@
+{
+  "name": "LuauContractSDK",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "LuauContractSDK": {
+        "$path": "src"
+      }
+    }
+  }
+}
