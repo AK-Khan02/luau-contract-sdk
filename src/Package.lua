@@ -1,5 +1,5 @@
 return {
 	name = "luau-contract-sdk",
-	version = "0.5.0",
-	description = "Generic contract engine primitives for Luau and Roblox game systems.",
+	version = "0.6.0",
+	description = "Luau contract SDK for rblx game systems.",
 }

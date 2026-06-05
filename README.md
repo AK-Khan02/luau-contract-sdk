@@ -1,6 +1,6 @@
 # Luau Contract SDK
 
-A small Luau contract SDK for Roblox game systems.
+A Luau contract SDK for rblx game systems.
 
 The SDK is intentionally generic. The core package does not know about weapons,
 maps, pets, obbies, tycoons, or any other genre.
@@ -8,7 +8,9 @@ maps, pets, obbies, tycoons, or any other genre.
 ## What It Includes
 
 - System contract definitions: `ownsTag`, `ownsFolder`, `mayRead`, `mayWrite`,
-  `mustNeverTouch`, `remote`, `postcondition`, and `lifecycle`.
+  `mustNeverTouch`, `precondition`, `postcondition`, `lifecycle`, and `action`.
+- Action contracts with input/output schemas, scoped effects, preconditions,
+  postconditions, actor policies, lifecycle guards, and action-bound remotes.
 - Pure payload schemas for remote validation.
 - Lifecycle reducers for explicit state transitions.
 - Stable invariant and postcondition failure names.
@@ -24,8 +26,8 @@ maps, pets, obbies, tycoons, or any other genre.
 - Studio report model for contract systems, diagnostics, and scanner findings.
 - Roblox Studio plugin source with a dock widget for systems and static findings.
 - A small rate limiter used by guarded remotes.
-- Minimal Roblox adapters for remote guarding, ownership attributes, and
-  postcondition-running around server actions.
+- Minimal Roblox adapters for action-bound remote guarding, ownership
+  attributes, and postcondition-running around legacy server actions.
 - Roblox overlay state adapter for feeding debug UI.
 - Generic checkpoint, inventory, and spawn/loadout example contracts.
 - Root package entry at `src/init.lua`.
@@ -42,6 +44,7 @@ src/
   Package.lua
   Contracts.lua
   Core/
+    ActionScope.lua
     DiagnosticReport.lua
     Diagnostics.lua
     Invariant.lua
@@ -84,6 +87,7 @@ local PlayerLifecycle = Contracts.lifecycle("Player")
 	:transition("Menu", "Deploy", "DeployRequested")
 	:transition("DeployRequested", "SpawnStarted", "Spawning")
 	:transition("Spawning", "Spawned", "Alive")
+	:transition("Alive", "WeaponAction", "Alive")
 
 local CombatContract = Contracts.system("CombatService")
 	:ownsTag("GeneratedWeaponTool")
@@ -91,13 +95,67 @@ local CombatContract = Contracts.system("CombatService")
 	:mayWrite("Player.Backpack")
 	:mustNeverTouch("Workspace.CurrentArena")
 	:lifecycle("Player", PlayerLifecycle)
-	:remote("WeaponAction", Contracts.object({
-		Action = Contracts.oneOf({ "Fire", "Reload" }),
-		WeaponId = Contracts.stringId(),
-	}))
+	:precondition("CharacterLoaded", function(context)
+		return context.character ~= nil
+	end)
 	:postcondition("PlayerHasOneWeapon", function(context)
 		return context.weaponCount == 1
 	end)
+	:action("WeaponAction", {
+		input = Contracts.object({
+			Action = Contracts.oneOf({ "Fire", "Reload" }),
+			WeaponId = Contracts.stringId(),
+		}),
+		output = Contracts.object({
+			accepted = Contracts.boolean(),
+		}),
+		reads = { "Player.Character" },
+		writes = { "Player.Backpack" },
+		preconditions = { "CharacterLoaded" },
+		postconditions = { "PlayerHasOneWeapon" },
+		lifecycle = {
+			requires = {
+				Player = "Alive",
+			},
+			emits = {
+				Player = "WeaponAction",
+			},
+		},
+		remote = {
+			name = "WeaponAction",
+			direction = "server",
+		},
+		policy = {
+			actorRequired = true,
+		},
+	})
+```
+
+Actions run through one guarded path:
+
+```lua
+local result = CombatContract:runAction("WeaponAction", {
+	actor = player,
+	payload = {
+		Action = "Fire",
+		WeaponId = "Rifle",
+	},
+	context = {
+		character = character,
+		weaponCount = 1,
+	},
+	states = {
+		Player = "Alive",
+	},
+}, function(scope)
+	local payload = scope:payload()
+
+	return scope:write("Player.Backpack", function()
+		return {
+			accepted = payload.Action == "Fire" or payload.Action == "Reload",
+		}
+	end)
+end)
 ```
 
 Roblox adapters are available from the same package:
@@ -167,10 +225,11 @@ objects.
 
 ## Honest Boundary
 
-The SDK enforces contracts where game code uses it. It can validate guarded
-remotes, run postconditions, record named failures, rate-limit guarded remote
-handlers, mark/check owned Roblox Instances through adapters, and expose stable
-diagnostic data to overlays, reports, or the Studio plugin source.
+The SDK enforces contracts where game code uses it. It can run guarded actions,
+validate guarded remotes, enforce scoped effects, run preconditions and
+postconditions, record named failures, rate-limit guarded remote handlers,
+mark/check owned Roblox Instances through adapters, and expose stable diagnostic
+data to overlays, reports, or the Studio plugin source.
 
 It cannot prevent every raw `Destroy()`, every unguarded `OnServerEvent`, or every
 broad cleanup written outside the SDK. The static scanner can flag likely risks in

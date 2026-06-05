@@ -59,12 +59,6 @@ local Contract = Contracts.system("SpawnLoadoutService")
 	:mayWrite("Player.Backpack.StarterTool")
 	:mustNeverTouch("Workspace.Map")
 	:lifecycle("Spawn", SpawnLifecycle)
-	:remote("SpawnRequest", SpawnRequestSchema, {
-		rateLimit = {
-			maxRequests = 4,
-			windowSeconds = 2,
-		},
-	})
 	:postcondition("CharacterAliveAfterSpawn", function(context)
 		return context.character ~= nil and isAliveHumanoid(context.humanoid)
 	end)
@@ -72,6 +66,48 @@ local Contract = Contracts.system("SpawnLoadoutService")
 		local toolName = context.toolName or "StarterTool"
 		return countPlayerTools(context.player, toolName) == 1
 	end)
+	:action("SpawnPlayer", {
+		input = SpawnRequestSchema,
+		output = Contracts.object({
+			spawned = Contracts.boolean(),
+			spawnPointId = Contracts.optional(Contracts.stringId()),
+		}, {
+			allowExtra = false,
+		}),
+		reads = {
+			"Workspace.SpawnPoints",
+			"Player.Character",
+			"Player.Backpack",
+		},
+		writes = {
+			"Player.RespawnLocation",
+			"Player.Backpack.StarterTool",
+		},
+		postconditions = {
+			"CharacterAliveAfterSpawn",
+			"OneStarterToolAfterSpawn",
+		},
+		lifecycle = {
+			requires = {
+				Spawn = "Menu",
+			},
+			emits = {
+				Spawn = "SpawnRequested",
+			},
+		},
+		remote = {
+			name = "SpawnRequest",
+			direction = "server",
+			rateLimit = {
+				maxRequests = 4,
+				windowSeconds = 2,
+			},
+		},
+		policy = {
+			actorRequired = true,
+		},
+		tags = { "spawn", "loadout" },
+	})
 
 return {
 	Contract = Contract,

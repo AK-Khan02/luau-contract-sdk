@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.5.0
+luau-contract-sdk/core@0.6.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -40,10 +40,11 @@ The core modules are pure Luau and can be tested outside Studio. Roblox adapters
 expect Roblox-like values:
 
 - `RemoteGuard` expects a `RemoteEvent` with `OnServerEvent:Connect`.
+  Action-bound remotes run through `System:runAction`.
 - `Ownership` expects an Instance-like value with `SetAttribute`, `GetAttribute`,
   and optionally `Destroy`.
-- `PostconditionRunner` wraps any server action and then runs contract
-  postconditions against the supplied context.
+- `PostconditionRunner` is a small compatibility adapter for code that only
+  needs post-action checks.
 - `OverlayState` exposes rows and formatted text for a Roblox debug overlay
   without creating UI itself.
 
@@ -60,8 +61,9 @@ src/
       Spawn.contract.lua
 ```
 
-Use the SDK core to define contracts and the Roblox adapters only at runtime
-boundaries such as remote handlers, object ownership, and post-action checks.
+Use the SDK core to define systems and actions. Route meaningful runtime work
+through `System:runAction`, and use the Roblox adapters only at concrete
+boundaries such as remote handlers, object ownership, and overlay state.
 
 ## Diagnostics Hook
 

@@ -54,6 +54,7 @@ local function addSystems(systems, scriptInfo)
 			path = scriptPath(scriptInfo),
 			ownedTags = countPattern(source, ":ownsTag%s*%("),
 			ownedFolders = countPattern(source, ":ownsFolder%s*%("),
+			actions = countPattern(source, ":action%s*%("),
 			remotes = countPattern(source, ":remote%s*%("),
 			postconditions = countPattern(source, ":postcondition%s*%("),
 			lifecycles = countPattern(source, ":lifecycle%s*%("),
@@ -154,10 +155,11 @@ function StudioReport.fromScripts(scripts, options)
 end
 
 function StudioReport.formatSystem(system)
-	return ("%s  tags=%d folders=%d remotes=%d post=%d"):format(
+	return ("%s  tags=%d folders=%d actions=%d remotes=%d post=%d"):format(
 		system.name,
 		system.ownedTags or 0,
 		system.ownedFolders or 0,
+		system.actions or 0,
 		system.remotes or 0,
 		system.postconditions or 0
 	)

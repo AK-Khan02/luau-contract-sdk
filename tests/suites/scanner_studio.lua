@@ -108,6 +108,10 @@ return Contracts.system("CombatService")
 	:postcondition("PlayerHasWeapon", function(context)
 		return true
 	end)
+	:action("WeaponAction", {
+		input = Contracts.object({}),
+		postconditions = { "PlayerHasWeapon" },
+	})
 ]],
 		},
 		{
@@ -125,7 +129,12 @@ end)
 
 	check("studio report counts scripts", studioReport.summary.scriptCount == 2)
 	check("studio report extracts contract systems", studioReport.summary.systemCount == 1)
-	check("studio report extracts system details", studioReport.systems[1].remotes == 1 and studioReport.systems[1].postconditions == 1)
+	check(
+		"studio report extracts system details",
+		studioReport.systems[1].actions == 1
+			and studioReport.systems[1].remotes == 1
+			and studioReport.systems[1].postconditions == 1
+	)
 	check("studio report includes scanner findings", studioReport.summary.scannerFindingCount == 1)
 	check("studio report includes diagnostics", studioReport.summary.diagnosticCount == 1 and #studioReport.diagnostics == 1)
 	check("studio report formats systems", string.find(StudioReport.formatSystem(studioReport.systems[1]), "CombatService", 1, true) ~= nil)

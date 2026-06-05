@@ -5,6 +5,7 @@ local TestHarness = require("./TestHarness")
 local suites = {
 	require("./suites/package_schema_lifecycle"),
 	require("./suites/diagnostics_system"),
+	require("./suites/action_contracts"),
 	require("./suites/adapters_examples"),
 	require("./suites/scanner_studio"),
 }

@@ -15,6 +15,16 @@ local function assertRemoteEvent(remoteEvent)
 	end
 end
 
+local function actionContext(options, player, remoteName)
+	local context = {}
+	for key, value in pairs(options.context or {}) do
+		context[key] = value
+	end
+	context.player = player
+	context.remote = remoteName
+	return context
+end
+
 function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, options)
 	options = options or {}
 
@@ -28,6 +38,7 @@ function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, o
 
 	local diagnostics = options.diagnostics
 	local remoteOptions = systemContract:remoteOptions(remoteName) or {}
+	local actionName = options.action or remoteOptions.action
 	local rateLimit = options.rateLimit or remoteOptions.rateLimit
 	local limiter = rateLimit and RateLimiter.new(rateLimit, options.clock) or nil
 
@@ -45,6 +56,36 @@ function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, o
 				},
 			})
 			return nil
+		end
+
+		if actionName and systemContract.runAction then
+			local actionOptions = systemContract.actionOptions and systemContract:actionOptions(actionName) or nil
+			if actionOptions ~= nil and actionOptions.input == nil then
+				local remoteValidation = systemContract:validateRemote(remoteName, payload, diagnostics, {
+					player = player,
+					remote = remoteName,
+				})
+				if not remoteValidation.ok then
+					return nil
+				end
+				payload = remoteValidation.value
+			end
+
+			local actionResult = systemContract:runAction(actionName, {
+				actor = player,
+				payload = payload,
+				diagnostics = diagnostics,
+				states = options.states,
+				context = actionContext(options, player, remoteName),
+			}, function(scope)
+				return handler(player, scope:payload(), scope)
+			end)
+
+			if not actionResult.ok then
+				return nil
+			end
+
+			return actionResult.value
 		end
 
 		local validation = systemContract:validateRemote(remoteName, payload, diagnostics, {

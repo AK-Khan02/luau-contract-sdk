@@ -14,20 +14,162 @@ Inside a packaged Roblox project, require the package ModuleScript that maps to
 ## Contract Builder
 
 ```lua
+local PlayerLifecycle = Contracts.lifecycle("Player")
+	:transition("Alive", "WeaponAction", "Alive")
+
 local Contract = Contracts.system("CombatService")
 	:ownsTag("GeneratedWeaponTool")
 	:ownsFolder("Workspace.CombatEffects")
 	:mayRead("Player.Character")
 	:mayWrite("Player.Backpack")
 	:mustNeverTouch("Workspace.CurrentArena")
-	:remote("WeaponAction", Contracts.object({
-		Action = Contracts.oneOf({ "Fire", "Reload" }),
-		WeaponId = Contracts.stringId(),
-	}))
+	:lifecycle("Player", PlayerLifecycle)
+	:precondition("CharacterLoaded", function(context)
+		return context.character ~= nil
+	end)
 	:postcondition("PlayerHasWeapon", function(context)
 		return context.weaponCount == 1
 	end)
+	:action("WeaponAction", {
+		input = Contracts.object({
+			Action = Contracts.oneOf({ "Fire", "Reload" }),
+			WeaponId = Contracts.stringId(),
+		}),
+		output = Contracts.object({
+			accepted = Contracts.boolean(),
+		}),
+		reads = { "Player.Character" },
+		writes = { "Player.Backpack" },
+		preconditions = { "CharacterLoaded" },
+		postconditions = { "PlayerHasWeapon" },
+		lifecycle = {
+			requires = {
+				Player = "Alive",
+			},
+			emits = {
+				Player = "WeaponAction",
+			},
+		},
+		remote = {
+			name = "WeaponAction",
+			direction = "server",
+			rateLimit = {
+				maxRequests = 10,
+				windowSeconds = 5,
+			},
+		},
+		policy = {
+			actorRequired = true,
+		},
+	})
 ```
+
+## Action Contracts
+
+Actions are the primary runtime guard for meaningful game operations. They can
+validate input, validate output, enforce scoped effects, check actor policy, run
+preconditions and postconditions, and apply lifecycle transitions.
+
+```lua
+local result = Contract:runAction("WeaponAction", {
+	actor = player,
+	payload = {
+		Action = "Fire",
+		WeaponId = "Rifle",
+	},
+	context = {
+		character = character,
+		weaponCount = 1,
+	},
+	states = {
+		Player = "Alive",
+	},
+	diagnostics = diagnostics,
+}, function(scope)
+	local payload = scope:payload()
+
+	scope:read("Player.Character", function(context)
+		return context.character
+	end)
+
+	return scope:write("Player.Backpack", function()
+		return {
+			accepted = payload.Action == "Fire",
+		}
+	end)
+end)
+```
+
+`runAction` returns a plain table:
+
+- `ok`
+- `name`
+- `value`
+- `context`
+- `effects`
+- `preconditions`
+- `postconditions`
+- `lifecycle`
+
+Action definitions support:
+
+- `input`
+- `output`
+- `context`
+- `reads`
+- `writes`
+- `touches`
+- `creates`
+- `destroys`
+- `forbids`
+- `preconditions`
+- `postconditions`
+- `lifecycle.requires`
+- `lifecycle.emits`
+- `remote`
+- `policy`
+- `tags`
+
+Useful action methods:
+
+- `contract:action(name, definition)`
+- `contract:actionOptions(name)`
+- `contract:hasAction(name)`
+- `contract:validateActionInput(name, payload, diagnostics, context)`
+- `contract:validateActionOutput(name, value, diagnostics, context)`
+- `contract:validateActionContext(name, context, diagnostics)`
+- `contract:checkRead(actionName, path, diagnostics, context)`
+- `contract:checkWrite(actionName, path, diagnostics, context)`
+- `contract:checkEffect(actionName, effect, diagnostics, context)`
+- `contract:runAction(name, options, handler)`
+
+The action scope passed to the handler exposes:
+
+- `scope:payload()`
+- `scope:input()`
+- `scope:context()`
+- `scope:actor()`
+- `scope:read(path, readerOrValue)`
+- `scope:write(path, writerOrValue)`
+- `scope:create(path, creatorOrValue)`
+- `scope:destroy(path, destroyerOrValue)`
+- `scope:touch(path, toucherOrValue)`
+- `scope:effects()`
+
+## Remote Contracts
+
+Legacy remote validation can still be declared directly:
+
+```lua
+Contract:remote("WeaponAction", Contracts.object({
+	Action = Contracts.oneOf({ "Fire", "Reload" }),
+	WeaponId = Contracts.stringId(),
+}))
+```
+
+When an action declares `remote = { name = "WeaponAction" }`, the system
+automatically registers that remote with the action input schema and stores the
+action binding in `remoteOptions`.
 
 ## Schemas
 
@@ -177,3 +319,7 @@ local OverlayState = Contracts.Roblox.OverlayState
 
 The core package remains Roblox-free. Adapters are the only layer that expects
 RemoteEvent-like or Instance-like values.
+
+`RemoteGuard.connect` detects action-bound remotes and routes them through
+`System:runAction`. Handlers for action-bound remotes receive
+`(player, payload, scope)`.
