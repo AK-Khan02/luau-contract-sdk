@@ -1,5 +1,6 @@
 local Diagnostics = require("./Core/Diagnostics")
 local DiagnosticReport = require("./Core/DiagnosticReport")
+local EffectPlan = require("./Core/EffectPlan")
 local Invariant = require("./Core/Invariant")
 local Lifecycle = require("./Core/Lifecycle")
 local LifecycleSession = require("./Core/LifecycleSession")
@@ -16,6 +17,7 @@ local System = require("./Core/System")
 local Contracts = {
 	Diagnostics = Diagnostics,
 	DiagnosticReport = DiagnosticReport,
+	EffectPlan = EffectPlan,
 	Invariant = Invariant,
 	Lifecycle = Lifecycle,
 	LifecycleSession = LifecycleSession,

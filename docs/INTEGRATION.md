@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.10.0
+luau-contract-sdk/core@0.11.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -165,6 +165,24 @@ Contract:checkActionEffect("GrantItem", {
 	kind = "write",
 	target = "Player.Inventory.Items.Rifle",
 }, diagnostics)
+```
+
+Use staged effects for mutations that should not happen until output validation,
+postconditions, and lifecycle transition checks have passed:
+
+```lua
+runtime:implement("GrantItem", function(scope)
+	local itemId = scope:payload().ItemId
+
+	scope:stageWrite("Player.Inventory", function(context)
+		context.inventory[itemId] = true
+	end)
+
+	return {
+		granted = true,
+		itemId = itemId,
+	}
+end)
 ```
 
 ## Diagnostics Hook

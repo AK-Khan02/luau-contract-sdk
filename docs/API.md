@@ -78,8 +78,9 @@ local Contract = Contracts.system("CombatService")
 ## Action Contracts
 
 Actions are the primary runtime guard for meaningful game operations. They can
-validate input, validate output, enforce scoped effects, check actor policy, run
-preconditions and postconditions, and apply lifecycle transitions.
+validate input, validate output, enforce scoped effects, stage transactional
+effects, check actor policy, run preconditions and postconditions, and apply
+lifecycle transitions.
 
 ```lua
 local session = Contract:lifecycleSession({
@@ -124,6 +125,8 @@ end)
 - `preconditions`
 - `postconditions`
 - `lifecycle`
+- `commit`
+- `rollback`
 
 Action definitions support:
 
@@ -167,7 +170,85 @@ The action scope passed to the handler exposes:
 - `scope:create(path, creatorOrValue)`
 - `scope:destroy(path, destroyerOrValue)`
 - `scope:touch(path, toucherOrValue)`
+- `scope:stageEffect(kind, path, commitOrEffect)`
+- `scope:stageWrite(path, commitOrEffect)`
+- `scope:stageCreate(path, commitOrEffect)`
+- `scope:stageDestroy(path, commitOrEffect)`
+- `scope:stageTouch(path, commitOrEffect)`
 - `scope:effects()`
+
+## Transactional Effect Plans
+
+Immediate scope helpers such as `scope:write(...)` still run the given function
+immediately after permission checks. Use staged effects when a mutation should
+only commit after output validation, postconditions, and lifecycle transition
+checks pass.
+
+```lua
+Contract
+	:postcondition("PlansInventoryGrant", function(context)
+		return context.effects:has({
+			kind = "write",
+			target = "Player.Inventory",
+			itemId = context.result.itemId,
+		})
+	end)
+	:action("GrantItem", {
+		input = GrantItemSchema,
+		output = GrantItemResultSchema,
+		writes = { "Player.Inventory" },
+		postconditions = { "PlansInventoryGrant" },
+	})
+
+runtime:implement("GrantItem", function(scope)
+	local itemId = scope:payload().ItemId
+
+	scope:stageWrite("Player.Inventory", {
+		metadata = {
+			itemId = itemId,
+		},
+		commit = function(context)
+			context.inventory[itemId] = true
+		end,
+		rollback = function(context)
+			context.inventory[itemId] = nil
+		end,
+	})
+
+	return {
+		granted = true,
+		itemId = itemId,
+	}
+end)
+```
+
+`System:runAction` commits staged effects only after:
+
+- input and context validation pass
+- actor policy passes
+- lifecycle requirements pass
+- preconditions pass
+- handler returns
+- output validation passes
+- postconditions pass
+- lifecycle transitions can be reduced
+
+If a staged effect commit fails, the SDK records `ActionCommitFailed`, rolls back
+previously committed staged effects in reverse order, and returns the rollback
+report. If rollback fails, the SDK records `ActionRollbackFailed`; if no rollback
+hook exists, it records `ActionRollbackUnavailable`.
+
+Effect reports are serializable and include:
+
+- `kind`
+- `target`
+- `status`
+- `metadata`
+- `result`
+- `error`
+
+Common statuses are `planned`, `committed`, `rolledBack`, `failed`,
+`rollbackFailed`, and `rollbackUnavailable`.
 
 ## Runtime
 

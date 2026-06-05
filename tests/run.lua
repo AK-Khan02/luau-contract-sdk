@@ -6,6 +6,7 @@ local suites = {
 	require("./suites/package_schema_lifecycle"),
 	require("./suites/diagnostics_system"),
 	require("./suites/action_contracts"),
+	require("./suites/effect_plans"),
 	require("./suites/lifecycle_sessions"),
 	require("./suites/remote_policies_reports"),
 	require("./suites/runtime"),

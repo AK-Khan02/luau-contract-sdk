@@ -1625,6 +1625,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 	end
 
 	local scope = ActionScope.new(self, actionName, context, diagnostics)
+	context.effects = scope:effectView()
 	local ok, value = pcall(handler, scope)
 	if not ok then
 		local scopeViolation = ActionScope.violationResult(value)
@@ -1655,6 +1656,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 		}
 	end
 
+	context.effects = scope:effectView()
 	local outputValidation = self:validateActionOutput(actionName, value, diagnostics, context)
 	if not outputValidation.ok then
 		return {
@@ -1668,6 +1670,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 	end
 
 	context.result = outputValidation.value
+	context.effects = scope:effectView()
 	local postconditions = self:checkActionPostconditions(actionName, context, diagnostics)
 	if not postconditions.ok then
 		return {
@@ -1680,15 +1683,50 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 		}
 	end
 
-	local lifecycle = nil
+	local preparedLifecycle = self:reduceActionLifecycle(actionName, states, diagnostics, context)
+	if not preparedLifecycle.ok then
+		return {
+			ok = false,
+			name = preparedLifecycle.name or "ActionLifecycleTransitionInvalid",
+			reason = preparedLifecycle.reason,
+			value = outputValidation.value,
+			context = context,
+			effects = scope:effects(),
+			postconditions = postconditions,
+			lifecycle = preparedLifecycle,
+		}
+	end
+
+	local effectOptions = {
+		system = self._name,
+		action = actionName,
+	}
+	local commit = scope:commitEffects(diagnostics, effectOptions)
+	context.effects = scope:effectView()
+	if not commit.ok then
+		return {
+			ok = false,
+			name = commit.name,
+			reason = commit.reason,
+			value = outputValidation.value,
+			context = context,
+			effects = scope:effects(),
+			postconditions = postconditions,
+			lifecycle = preparedLifecycle,
+			commit = commit,
+			rollback = commit.rollback,
+		}
+	end
+
+	local lifecycle = preparedLifecycle
 	if session ~= nil and type(session.apply) == "function" then
 		local target: any = session
 		lifecycle = target:apply(actionName, diagnostics, context, sessionRevision)
-	else
-		lifecycle = self:reduceActionLifecycle(actionName, states, diagnostics, context)
 	end
 
 	if not lifecycle.ok then
+		local rollback = scope:rollbackEffects(diagnostics, effectOptions)
+		context.effects = scope:effectView()
 		return {
 			ok = false,
 			name = lifecycle.name or "ActionLifecycleTransitionInvalid",
@@ -1698,9 +1736,12 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 			effects = scope:effects(),
 			postconditions = postconditions,
 			lifecycle = lifecycle,
+			commit = commit,
+			rollback = rollback,
 		}
 	end
 
+	context.effects = scope:effectView()
 	return {
 		ok = true,
 		name = actionName,
@@ -1710,6 +1751,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 		preconditions = preconditions,
 		postconditions = postconditions,
 		lifecycle = lifecycle,
+		commit = commit,
 	}
 end
 

@@ -12,6 +12,7 @@ Use it to define and enforce:
 
 - remote payload and response schemas
 - guarded server actions for important mutations
+- transactional staged writes, creates, and destroys
 - read/write/effect permissions
 - actor and admin policies
 - lifecycle state requirements and transitions
@@ -48,7 +49,7 @@ That gives you:
 - safer remotes: payloads, responses, actors, lifecycle guards, and rate limits
   are checked before game code trusts the call.
 - safer mutations: actions can only read, write, create, destroy, or touch the
-  paths they declared.
+  paths they declared, and staged effects only commit after late checks pass.
 - safer state machines: stale, duplicate, and out-of-order events fail before
   they advance a lifecycle session.
 - better failures: violations are named diagnostics that tools, tests, overlays,
@@ -378,6 +379,8 @@ use.
 - `Action`: wraps meaningful work in one guarded path.
 - `ActionScope`: records and enforces reads, writes, creates, destroys, and
   touches during an action.
+- `EffectPlan`: stages writes, creates, destroys, and rollback hooks for
+  transactional action commits.
 - `Lifecycle`: defines allowed states and transitions.
 - `LifecycleSession`: stores current lifecycle state, revision, snapshots, and
   guarded transition commits.
@@ -400,6 +403,7 @@ src/
     ContractReport.lua
     DiagnosticReport.lua
     Diagnostics.lua
+    EffectPlan.lua
     Invariant.lua
     Lifecycle.lua
     LifecycleSession.lua
@@ -456,6 +460,8 @@ objects.
 The SDK enforces contracts on code paths that use its guards. Route important
 remotes, actions, state transitions, and mutations through the SDK to get
 validation, diagnostics, rate limits, permission checks, and stable reports.
+Use staged effects for mutations that should only commit after output validation,
+postconditions, and lifecycle transition checks pass.
 
 The static scanner can also flag risky source patterns such as raw remote
 handlers, raw remote firing, broad cleanup, and unowned destroys.

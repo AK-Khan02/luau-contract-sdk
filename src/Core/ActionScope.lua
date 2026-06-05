@@ -1,25 +1,18 @@
 --!strict
 
+local EffectPlan = require("./EffectPlan")
+
 export type Effect = {
 	kind: string,
 	target: string,
+	status: string?,
+	metadata: any?,
 }
 
 local ActionScope: any = {}
 ActionScope.__index = ActionScope
 
 local VIOLATION_MARKER = "__luauContractActionScopeViolation"
-
-local function copyEffects(effects: {Effect}): {Effect}
-	local copy = {}
-	for index, effect in ipairs(effects) do
-		copy[index] = {
-			kind = effect.kind,
-			target = effect.target,
-		}
-	end
-	return copy
-end
 
 local function raiseViolation(result: any)
 	error({
@@ -53,7 +46,7 @@ function ActionScope.new(systemContract: any, actionName: string, context: any, 
 		_actionName = actionName,
 		_context = context,
 		_diagnostics = diagnostics,
-		_effects = {},
+		_effectPlan = EffectPlan.new(),
 	}, ActionScope)
 end
 
@@ -74,7 +67,11 @@ function ActionScope.diagnostics(self: any): any?
 end
 
 function ActionScope.effects(self: any): {Effect}
-	return copyEffects(self._effects)
+	return self._effectPlan:effects()
+end
+
+function ActionScope.effectView(self: any): any
+	return self._effectPlan:view()
 end
 
 function ActionScope.input(self: any): any
@@ -90,17 +87,19 @@ function ActionScope.system(self: any): any
 end
 
 function ActionScope._rememberEffect(self: any, kind: string, targetPath: string)
-	table.insert(self._effects, {
-		kind = kind,
-		target = targetPath,
-	})
+	local status = kind == "read" and "observed" or "committed"
+	self._effectPlan:record(kind, targetPath, status)
 end
 
-function ActionScope.checkEffect(self: any, kind: string, targetPath: string): any
-	local result = self._system:checkActionEffect(self._actionName, {
+function ActionScope._checkEffect(self: any, kind: string, targetPath: string): any
+	return self._system:checkActionEffect(self._actionName, {
 		kind = kind,
 		target = targetPath,
 	}, self._diagnostics, self._context)
+end
+
+function ActionScope.checkEffect(self: any, kind: string, targetPath: string): any
+	local result = self:_checkEffect(kind, targetPath)
 	if result.ok then
 		self:_rememberEffect(kind, targetPath)
 	end
@@ -153,6 +152,38 @@ function ActionScope.touch(self: any, targetPath: string, valueOrToucher: any): 
 		raiseViolation(result)
 	end
 	return runIfNeeded(valueOrToucher, self._context)
+end
+
+function ActionScope.stageEffect(self: any, kind: string, targetPath: string, operation: any): any
+	local result = self:_checkEffect(kind, targetPath)
+	if not result.ok then
+		raiseViolation(result)
+	end
+	return self._effectPlan:stage(kind, targetPath, operation)
+end
+
+function ActionScope.stageWrite(self: any, targetPath: string, operation: any): any
+	return self:stageEffect("write", targetPath, operation)
+end
+
+function ActionScope.stageCreate(self: any, targetPath: string, operation: any): any
+	return self:stageEffect("create", targetPath, operation)
+end
+
+function ActionScope.stageDestroy(self: any, targetPath: string, operation: any): any
+	return self:stageEffect("destroy", targetPath, operation)
+end
+
+function ActionScope.stageTouch(self: any, targetPath: string, operation: any): any
+	return self:stageEffect("touch", targetPath, operation)
+end
+
+function ActionScope.commitEffects(self: any, diagnostics: any?, options: any?): any
+	return self._effectPlan:commit(self._context, diagnostics or self._diagnostics, options)
+end
+
+function ActionScope.rollbackEffects(self: any, diagnostics: any?, options: any?): any
+	return self._effectPlan:rollback(self._context, diagnostics or self._diagnostics, options)
 end
 
 return ActionScope
