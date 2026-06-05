@@ -1,6 +1,6 @@
 # Luau Contract SDK
 
-A small but powerful Luau SDK for making rblx game systems safer, easier to
+A small but powerful Luau SDK for making Roblox game systems safer, easier to
 reason about, and easier to inspect.
 
 The SDK helps you define contracts around the parts of game code that usually
