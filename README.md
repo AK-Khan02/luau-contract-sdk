@@ -15,7 +15,8 @@ maps, pets, obbies, tycoons, or any other genre.
 - Enforced permission capabilities for system-level and action-level reads,
   writes, creates, destroys, and touches.
 - Pure payload schemas for remote validation.
-- Lifecycle reducers for explicit state transitions.
+- Lifecycle reducers and sessions for explicit state transitions, stale revision
+  checks, and session-backed action guards.
 - Stable invariant and postcondition failure names.
 - Diagnostics ring buffer for recent contract violations.
 - Searchable diagnostic records with IDs, categories, codes, systems, names, and
@@ -52,6 +53,7 @@ src/
     Diagnostics.lua
     Invariant.lua
     Lifecycle.lua
+    LifecycleSession.lua
     OverlayFeed.lua
     RateLimiter.lua
     Schema.lua
@@ -138,6 +140,10 @@ local CombatContract = Contracts.system("CombatService")
 Actions run through one guarded path:
 
 ```lua
+local combatSession = CombatContract:lifecycleSession({
+	Player = "Alive",
+})
+
 local result = CombatContract:runAction("WeaponAction", {
 	actor = player,
 	payload = {
@@ -148,9 +154,8 @@ local result = CombatContract:runAction("WeaponAction", {
 		character = character,
 		weaponCount = 1,
 	},
-	states = {
-		Player = "Alive",
-	},
+	session = combatSession,
+	expectedRevision = combatSession:revision(),
 }, function(scope)
 	local payload = scope:payload()
 

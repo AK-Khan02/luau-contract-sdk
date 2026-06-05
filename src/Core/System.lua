@@ -1,6 +1,7 @@
 --!strict
 
 local ActionScope = require("./ActionScope")
+local LifecycleSession = require("./LifecycleSession")
 local Schema = require("./Schema")
 
 export type ActionDescription = {
@@ -325,7 +326,23 @@ local function actionInput(options: any, context: any): any
 end
 
 local function actionStates(options: any): any
+	local session = options.session
+	if session and type(session.states) == "function" then
+		local target: any = session
+		return target:states()
+	end
 	return copyMap(options.states or {})
+end
+
+local function actionSession(options: any): any?
+	if options.session ~= nil then
+		return options.session
+	end
+	return nil
+end
+
+local function expectedLifecycleRevision(options: any): number?
+	return options.expectedRevision or options.revision
 end
 
 local function buildAction(actionName: string, definition: any): any
@@ -495,6 +512,10 @@ function System.lifecycle(self: any, name: string, lifecycle: any): any
 	assertName("Lifecycle name", name)
 	self._lifecycles[name] = lifecycle
 	return self
+end
+
+function System.lifecycleSession(self: any, initialStates: any?, options: any?): any
+	return LifecycleSession.new(self, initialStates or {}, options)
 end
 
 function System.precondition(self: any, name: string, check: (any) -> any): any
@@ -1420,12 +1441,25 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 		}
 	end
 
+	local session = actionSession(options)
+	local expectedRevision = expectedLifecycleRevision(options)
 	local states = actionStates(options)
-	local lifecycleRequirements = self:checkActionLifecycle(actionName, states, diagnostics, context)
+	local sessionRevision = nil
+	local lifecycleRequirements = nil
+	if session ~= nil and type(session.canRun) == "function" then
+		local target: any = session
+		lifecycleRequirements = target:canRun(actionName, diagnostics, context, expectedRevision)
+		sessionRevision = lifecycleRequirements.revision
+		states = lifecycleRequirements.states or states
+	else
+		lifecycleRequirements = self:checkActionLifecycle(actionName, states, diagnostics, context)
+	end
+
 	if not lifecycleRequirements.ok then
 		return {
 			ok = false,
-			name = "ActionLifecycleStateInvalid",
+			name = lifecycleRequirements.name or "ActionLifecycleStateInvalid",
+			reason = lifecycleRequirements.reason,
 			context = context,
 			lifecycle = lifecycleRequirements,
 		}
@@ -1497,11 +1531,19 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 		}
 	end
 
-	local lifecycle = self:reduceActionLifecycle(actionName, states, diagnostics, context)
+	local lifecycle = nil
+	if session ~= nil and type(session.apply) == "function" then
+		local target: any = session
+		lifecycle = target:apply(actionName, diagnostics, context, sessionRevision)
+	else
+		lifecycle = self:reduceActionLifecycle(actionName, states, diagnostics, context)
+	end
+
 	if not lifecycle.ok then
 		return {
 			ok = false,
-			name = "ActionLifecycleTransitionInvalid",
+			name = lifecycle.name or "ActionLifecycleTransitionInvalid",
+			reason = lifecycle.reason,
 			value = outputValidation.value,
 			context = context,
 			effects = scope:effects(),

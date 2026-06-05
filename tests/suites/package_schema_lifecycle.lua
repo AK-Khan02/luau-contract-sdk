@@ -12,12 +12,13 @@ return function(test)
 	test:section("Package")
 
 	check("package root exports contracts api", PackageRoot.system == Contracts.system)
-	check("package exposes version", PackageRoot.version == "0.7.0")
+	check("package exposes version", PackageRoot.version == "0.8.0")
 	check("package metadata is present", PackageRoot.Package.name == "luau-contract-sdk")
 	check("package root exports Roblox adapters", PackageRoot.Roblox.RemoteGuard == RemoteGuard)
 	check("package root exports overlay feed", PackageRoot.OverlayFeed == Contracts.OverlayFeed)
 	check("package root exports static scanner", PackageRoot.StaticScanner == Contracts.StaticScanner)
 	check("package root exports studio report", PackageRoot.Studio.StudioReport == Contracts.Studio.StudioReport)
+	check("package root exports lifecycle sessions", PackageRoot.LifecycleSession == Contracts.LifecycleSession)
 
 	test:section("Schema")
 

@@ -2,6 +2,7 @@ local Diagnostics = require("./Core/Diagnostics")
 local DiagnosticReport = require("./Core/DiagnosticReport")
 local Invariant = require("./Core/Invariant")
 local Lifecycle = require("./Core/Lifecycle")
+local LifecycleSession = require("./Core/LifecycleSession")
 local OverlayFeed = require("./Core/OverlayFeed")
 local Package = require("./Package")
 local RateLimiter = require("./Core/RateLimiter")
@@ -16,6 +17,7 @@ local Contracts = {
 	DiagnosticReport = DiagnosticReport,
 	Invariant = Invariant,
 	Lifecycle = Lifecycle,
+	LifecycleSession = LifecycleSession,
 	OverlayFeed = OverlayFeed,
 	Package = Package,
 	RateLimiter = RateLimiter,
@@ -33,6 +35,10 @@ end
 
 function Contracts.lifecycle(name)
 	return Lifecycle.new(name)
+end
+
+function Contracts.lifecycleSession(systemContract, initialStates, options)
+	return LifecycleSession.new(systemContract, initialStates, options)
 end
 
 function Contracts.system(name)

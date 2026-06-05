@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.7.0
+luau-contract-sdk/core@0.8.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -64,6 +64,36 @@ src/
 Use the SDK core to define systems and actions. Route meaningful runtime work
 through `System:runAction`, and use the Roblox adapters only at concrete
 boundaries such as remote handlers, object ownership, and overlay state.
+
+Use lifecycle sessions for stateful flows such as rounds, deploys, matchmaking,
+or per-player setup:
+
+```lua
+local session = Contract:lifecycleSession({
+	Match = "Lobby",
+})
+
+Contract:runAction("StartRound", {
+	session = session,
+	expectedRevision = session:revision(),
+	diagnostics = diagnostics,
+}, function()
+	return startRound()
+end)
+```
+
+Remote adapters can receive either one shared session or a resolver:
+
+```lua
+RemoteGuard.connect(Contract, "DeployRemote", remote, handler, {
+	sessionFor = function(player)
+		return playerSessions[player.UserId]
+	end,
+	revision = function(player, payload)
+		return payload.Revision
+	end,
+})
+```
 
 Use `strictPermissions()` once a system has declared its intended read/write
 surface. In strict mode, undeclared reads and writes fail:

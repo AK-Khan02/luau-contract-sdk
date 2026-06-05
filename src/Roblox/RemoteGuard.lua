@@ -25,6 +25,54 @@ local function actionContext(options, player, remoteName)
 	return context
 end
 
+local function lifecycleSession(options, player, payload, remoteName, diagnostics, systemContract)
+	if type(options.sessionFor) == "function" then
+		local ok, sessionOrReason = pcall(options.sessionFor, player, payload, remoteName)
+		if ok then
+			return sessionOrReason
+		end
+
+		record(diagnostics, {
+			level = "error",
+			category = "lifecycle",
+			system = systemContract:name(),
+			name = "LifecycleSessionError",
+			message = tostring(sessionOrReason),
+			context = {
+				player = player,
+				remote = remoteName,
+			},
+		})
+		return nil
+	end
+
+	return options.session
+end
+
+local function expectedRevision(options, player, payload, remoteName, diagnostics, systemContract)
+	local revision = options.expectedRevision or options.revision
+	if type(revision) == "function" then
+		local ok, value = pcall(revision, player, payload, remoteName)
+		if ok then
+			return value, true
+		end
+
+		record(diagnostics, {
+			level = "error",
+			category = "lifecycle",
+			system = systemContract:name(),
+			name = "LifecycleRevisionError",
+			message = tostring(value),
+			context = {
+				player = player,
+				remote = remoteName,
+			},
+		})
+		return nil, false
+	end
+	return revision, true
+end
+
 function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, options)
 	options = options or {}
 
@@ -71,11 +119,18 @@ function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, o
 				payload = remoteValidation.value
 			end
 
+			local revision, revisionOk = expectedRevision(options, player, payload, remoteName, diagnostics, systemContract)
+			if revisionOk == false then
+				return nil
+			end
+
 			local actionResult = systemContract:runAction(actionName, {
 				actor = player,
 				payload = payload,
 				diagnostics = diagnostics,
 				states = options.states,
+				session = lifecycleSession(options, player, payload, remoteName, diagnostics, systemContract),
+				expectedRevision = revision,
 				context = actionContext(options, player, remoteName),
 			}, function(scope)
 				return handler(player, scope:payload(), scope)

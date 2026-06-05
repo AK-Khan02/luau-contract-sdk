@@ -72,6 +72,10 @@ validate input, validate output, enforce scoped effects, check actor policy, run
 preconditions and postconditions, and apply lifecycle transitions.
 
 ```lua
+local session = Contract:lifecycleSession({
+	Player = "Alive",
+})
+
 local result = Contract:runAction("WeaponAction", {
 	actor = player,
 	payload = {
@@ -82,9 +86,8 @@ local result = Contract:runAction("WeaponAction", {
 		character = character,
 		weaponCount = 1,
 	},
-	states = {
-		Player = "Alive",
-	},
+	session = session,
+	expectedRevision = session:revision(),
 	diagnostics = diagnostics,
 }, function(scope)
 	local payload = scope:payload()
@@ -140,6 +143,7 @@ Useful action methods:
 - `contract:validateActionOutput(name, value, diagnostics, context)`
 - `contract:validateActionContext(name, context, diagnostics)`
 - `contract:runAction(name, options, handler)`
+- `contract:lifecycleSession(initialStates, options)`
 
 The action scope passed to the handler exposes:
 
@@ -153,6 +157,67 @@ The action scope passed to the handler exposes:
 - `scope:destroy(path, destroyerOrValue)`
 - `scope:touch(path, toucherOrValue)`
 - `scope:effects()`
+
+## Lifecycle Sessions
+
+`Lifecycle` defines valid states and transitions. `LifecycleSession` owns the
+current state for a system instance, tracks a revision, checks stale callers, and
+commits action lifecycle transitions only after the action succeeds.
+
+```lua
+local MatchLifecycle = Contracts.lifecycle("Match")
+	:transition("Lobby", "RoundStarted", "Running")
+	:transition("Running", "RoundEnded", "Results")
+	:transition("Results", "Reset", "Lobby")
+
+local Match = Contracts.system("MatchService")
+	:lifecycle("Match", MatchLifecycle)
+	:action("StartRound", {
+		lifecycle = {
+			requires = {
+				Match = "Lobby",
+			},
+			emits = {
+				Match = "RoundStarted",
+			},
+		},
+	})
+
+local session = Match:lifecycleSession({
+	Match = "Lobby",
+})
+
+local result = Match:runAction("StartRound", {
+	session = session,
+	expectedRevision = session:revision(),
+	diagnostics = diagnostics,
+}, function()
+	return true
+end)
+```
+
+After a successful action, the session state becomes `Running` and the revision
+increments. Failed handlers, invalid outputs, failed postconditions, invalid
+states, and invalid emitted transitions do not mutate the session.
+
+Useful lifecycle session methods:
+
+- `session:state(lifecycleName)`
+- `session:states()`
+- `session:revision()`
+- `session:snapshot()`
+- `session:restore(snapshot)`
+- `session:canRun(actionName, diagnostics, context, expectedRevision)`
+- `session:apply(actionName, diagnostics, context, expectedRevision)`
+- `session:describe()`
+
+Sessions can also be created from the package root:
+
+```lua
+local session = Contracts.lifecycleSession(Match, {
+	Match = "Lobby",
+})
+```
 
 ## Permission Capabilities
 
@@ -397,3 +462,24 @@ RemoteEvent-like or Instance-like values.
 `RemoteGuard.connect` detects action-bound remotes and routes them through
 `System:runAction`. Handlers for action-bound remotes receive
 `(player, payload, scope)`.
+
+Action-bound remotes can use a shared lifecycle session:
+
+```lua
+RemoteGuard.connect(Match, "StartRoundRemote", remote, handler, {
+	session = matchSession,
+})
+```
+
+For per-player or per-match state, use `sessionFor`:
+
+```lua
+RemoteGuard.connect(Match, "DeployRemote", remote, handler, {
+	sessionFor = function(player, payload)
+		return sessions[player.UserId]
+	end,
+	revision = function(player, payload)
+		return payload.Revision
+	end,
+})
+```
