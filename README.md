@@ -8,9 +8,12 @@ maps, pets, obbies, tycoons, or any other genre.
 ## What It Includes
 
 - System contract definitions: `ownsTag`, `ownsFolder`, `mayRead`, `mayWrite`,
-  `mustNeverTouch`, `precondition`, `postcondition`, `lifecycle`, and `action`.
+  `mustNeverTouch`, `strictPermissions`, `precondition`, `postcondition`,
+  `lifecycle`, and `action`.
 - Action contracts with input/output schemas, scoped effects, preconditions,
   postconditions, actor policies, lifecycle guards, and action-bound remotes.
+- Enforced permission capabilities for system-level and action-level reads,
+  writes, creates, destroys, and touches.
 - Pure payload schemas for remote validation.
 - Lifecycle reducers for explicit state transitions.
 - Stable invariant and postcondition failure names.
@@ -94,6 +97,7 @@ local CombatContract = Contracts.system("CombatService")
 	:mayRead("Player.Character")
 	:mayWrite("Player.Backpack")
 	:mustNeverTouch("Workspace.CurrentArena")
+	:strictPermissions()
 	:lifecycle("Player", PlayerLifecycle)
 	:precondition("CharacterLoaded", function(context)
 		return context.character ~= nil
@@ -156,6 +160,17 @@ local result = CombatContract:runAction("WeaponAction", {
 		}
 	end)
 end)
+```
+
+Permissions can also be checked directly:
+
+```lua
+CombatContract:checkRead("Player.Character", diagnostics)
+CombatContract:checkWrite("Player.Backpack.Rifle", diagnostics)
+CombatContract:checkActionEffect("WeaponAction", {
+	kind = "write",
+	target = "Player.Backpack.Rifle",
+}, diagnostics)
 ```
 
 Roblox adapters are available from the same package:
@@ -226,10 +241,10 @@ objects.
 ## Honest Boundary
 
 The SDK enforces contracts where game code uses it. It can run guarded actions,
-validate guarded remotes, enforce scoped effects, run preconditions and
-postconditions, record named failures, rate-limit guarded remote handlers,
-mark/check owned Roblox Instances through adapters, and expose stable diagnostic
-data to overlays, reports, or the Studio plugin source.
+validate guarded remotes, enforce scoped effects and permission capabilities, run
+preconditions and postconditions, record named failures, rate-limit guarded
+remote handlers, mark/check owned Roblox Instances through adapters, and expose
+stable diagnostic data to overlays, reports, or the Studio plugin source.
 
 It cannot prevent every raw `Destroy()`, every unguarded `OnServerEvent`, or every
 broad cleanup written outside the SDK. The static scanner can flag likely risks in

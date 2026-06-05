@@ -23,6 +23,7 @@ local Contract = Contracts.system("CombatService")
 	:mayRead("Player.Character")
 	:mayWrite("Player.Backpack")
 	:mustNeverTouch("Workspace.CurrentArena")
+	:strictPermissions()
 	:lifecycle("Player", PlayerLifecycle)
 	:precondition("CharacterLoaded", function(context)
 		return context.character ~= nil
@@ -138,9 +139,6 @@ Useful action methods:
 - `contract:validateActionInput(name, payload, diagnostics, context)`
 - `contract:validateActionOutput(name, value, diagnostics, context)`
 - `contract:validateActionContext(name, context, diagnostics)`
-- `contract:checkRead(actionName, path, diagnostics, context)`
-- `contract:checkWrite(actionName, path, diagnostics, context)`
-- `contract:checkEffect(actionName, effect, diagnostics, context)`
 - `contract:runAction(name, options, handler)`
 
 The action scope passed to the handler exposes:
@@ -155,6 +153,82 @@ The action scope passed to the handler exposes:
 - `scope:destroy(path, destroyerOrValue)`
 - `scope:touch(path, toucherOrValue)`
 - `scope:effects()`
+
+## Permission Capabilities
+
+`mayRead`, `mayWrite`, and `mustNeverTouch` are enforceable capabilities.
+Without strict mode, empty read/write lists preserve compatibility and allow
+access. With `strictPermissions()`, empty read/write lists deny by default.
+
+```lua
+local Inventory = Contracts.system("InventoryService")
+	:strictPermissions()
+	:mayRead("Catalog.Items")
+	:mayWrite("Player.Inventory")
+	:mustNeverTouch("Workspace.Map")
+	:action("GrantItem", {
+		reads = { "Catalog.Items" },
+		writes = { "Player.Inventory.Items" },
+		creates = { "Player.Inventory.Items" },
+	})
+
+Inventory:checkRead("Catalog.Items.Rifle", diagnostics)
+Inventory:checkWrite("Player.Inventory.Items.Rifle", diagnostics)
+Inventory:checkEffect({
+	kind = "write",
+	target = "Player.Inventory.Items.Rifle",
+}, diagnostics)
+
+Inventory:checkActionRead("GrantItem", "Catalog.Items.Rifle", diagnostics)
+Inventory:checkActionWrite("GrantItem", "Player.Inventory.Items.Rifle", diagnostics)
+Inventory:checkActionEffect("GrantItem", {
+	kind = "create",
+	target = "Player.Inventory.Items.Rifle",
+}, diagnostics)
+```
+
+Batch checks return all results and a failure list:
+
+```lua
+local result = Inventory:checkActionEffects("GrantItem", {
+	{
+		kind = "read",
+		target = "Catalog.Items.Rifle",
+	},
+	{
+		kind = "destroy",
+		target = "Workspace.Map.Tile",
+	},
+}, diagnostics)
+```
+
+Permission results include:
+
+- `ok`
+- `name`
+- `system`
+- `action`
+- `kind`
+- `target`
+- `reason`
+- `strict`
+- `systemBoundaries`
+- `actionBoundaries`
+- `matchedSystemBoundary`
+- `matchedActionBoundary`
+- `forbiddenBoundary`
+
+Useful permission methods:
+
+- `contract:strictPermissions(enabled)`
+- `contract:checkRead(path, diagnostics, context)`
+- `contract:checkWrite(path, diagnostics, context)`
+- `contract:checkEffect(effect, diagnostics, context)`
+- `contract:checkEffects(effects, diagnostics, context)`
+- `contract:checkActionRead(actionName, path, diagnostics, context)`
+- `contract:checkActionWrite(actionName, path, diagnostics, context)`
+- `contract:checkActionEffect(actionName, effect, diagnostics, context)`
+- `contract:checkActionEffects(actionName, effects, diagnostics, context)`
 
 ## Remote Contracts
 

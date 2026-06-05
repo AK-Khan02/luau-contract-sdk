@@ -1,6 +1,6 @@
 [package]
 name = "luau-contract-sdk/core"
-version = "0.6.0"
+version = "0.7.0"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 description = "Luau contract SDK for rblx game systems."

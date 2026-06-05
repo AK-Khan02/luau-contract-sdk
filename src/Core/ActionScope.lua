@@ -97,7 +97,7 @@ function ActionScope._rememberEffect(self: any, kind: string, targetPath: string
 end
 
 function ActionScope.checkEffect(self: any, kind: string, targetPath: string): any
-	local result = self._system:checkEffect(self._actionName, {
+	local result = self._system:checkActionEffect(self._actionName, {
 		kind = kind,
 		target = targetPath,
 	}, self._diagnostics, self._context)

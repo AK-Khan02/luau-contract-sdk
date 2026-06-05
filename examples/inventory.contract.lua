@@ -11,6 +11,7 @@ return Contracts.system("InventoryService")
 	:ownsTag("InventoryItem")
 	:mayRead("Player.Backpack")
 	:mayWrite("Player.Backpack")
+	:strictPermissions()
 	:precondition("PlayerCanEquipItem", function(context)
 		return context.player ~= nil
 	end)

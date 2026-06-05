@@ -272,16 +272,116 @@ return function(test)
 	check("action runner checks actor policy", missingActor.ok == false)
 	check("action runner records actor policy failure", actorDiagnostics:last().name == "ActionActorRejected")
 
-	local createAllowed = grantContract:checkEffect("GrantItem", {
+	local createAllowed = grantContract:checkActionEffect("GrantItem", {
 		kind = "create",
 		target = "Player.Inventory.Items.Rifle",
 	})
-	local destroyDenied = grantContract:checkEffect("GrantItem", {
+	local destroyDenied = grantContract:checkActionEffect("GrantItem", {
 		kind = "destroy",
 		target = "Player.Inventory.Trash",
 	})
 	check("action effect allows declared create boundary", createAllowed.ok == true)
 	check("action effect denies undeclared destroy boundary", destroyDenied.ok == false)
+
+	test:section("PermissionCapabilities")
+
+	local permissionContract = Contracts.system("ProfileService")
+		:strictPermissions()
+		:mayRead("Player.Profile")
+		:mayWrite("Player.Inventory")
+		:mustNeverTouch("Workspace.Map")
+		:action("GrantItem", {
+			reads = { "Player.Profile.Public" },
+			writes = { "Player.Inventory.Items" },
+			creates = { "Player.Inventory.Items" },
+			destroys = { "Player.Inventory.Items" },
+			touches = { "Player.Inventory.Items" },
+			forbids = { "Player.Inventory.Locked" },
+		})
+
+	local permissionDescription = permissionContract:describe()
+	check("system describes strict permissions", permissionDescription.strictPermissions == true)
+
+	local readAllowed = permissionContract:checkRead("Player.Profile.Level")
+	local readDenied = permissionContract:checkRead("Player.Inventory")
+	check("standalone read allows declared boundary", readAllowed.ok == true and readAllowed.matchedSystemBoundary == "Player.Profile")
+	check("standalone read rejects undeclared boundary", readDenied.ok == false and readDenied.name == "ReadNotAllowed")
+
+	local writeAllowed = permissionContract:checkWrite("Player.Inventory.Items.Rifle")
+	local writeDeniedDiagnostics = Contracts.diagnostics()
+	local writeDenied = permissionContract:checkWrite("Player.Profile.Level", writeDeniedDiagnostics, {
+		requestId = "write-denied",
+	})
+	check("standalone write allows declared boundary", writeAllowed.ok == true and writeAllowed.kind == "write")
+	check(
+		"standalone write rejects undeclared boundary",
+		writeDenied.ok == false
+			and writeDeniedDiagnostics:last().category == "permission"
+			and writeDeniedDiagnostics:last().context.requestId == "write-denied"
+	)
+
+	local forbiddenReadDiagnostics = Contracts.diagnostics()
+	local forbiddenRead = permissionContract:checkRead("Workspace.Map.Tile", forbiddenReadDiagnostics)
+	check("forbidden boundary rejects reads", forbiddenRead.ok == false and forbiddenRead.name == "ForbiddenTouch" and forbiddenRead.strict == true)
+	check("forbidden boundary records matched boundary", forbiddenReadDiagnostics:last().context.boundary == "Workspace.Map")
+
+	local actionReadAllowed = permissionContract:checkActionRead("GrantItem", "Player.Profile.Public.DisplayName")
+	local actionReadDenied = permissionContract:checkActionRead("GrantItem", "Player.Profile.Private.Email")
+	check("action read allows narrowed boundary", actionReadAllowed.ok == true)
+	check("action read rejects outside narrowed boundary", actionReadDenied.ok == false and actionReadDenied.name == "ReadNotAllowed")
+
+	local actionWriteAllowed = permissionContract:checkActionWrite("GrantItem", "Player.Inventory.Items.Rifle")
+	local actionWriteDenied = permissionContract:checkActionWrite("GrantItem", "Player.Inventory.Currency")
+	check("action write allows narrowed boundary", actionWriteAllowed.ok == true)
+	check("action write rejects outside narrowed boundary", actionWriteDenied.ok == false and actionWriteDenied.action == "GrantItem")
+
+	local actionCreateAllowed = permissionContract:checkActionEffect("GrantItem", {
+		kind = "create",
+		target = "Player.Inventory.Items.Rifle",
+	})
+	local legacyActionCreateAllowed = permissionContract:checkEffect("GrantItem", {
+		kind = "create",
+		target = "Player.Inventory.Items.Rifle",
+	})
+	local actionTouchForbidden = permissionContract:checkActionEffect("GrantItem", {
+		kind = "touch",
+		target = "Player.Inventory.Locked.AdminOnly",
+	})
+	check("action effect allows declared create", actionCreateAllowed.ok == true)
+	check("legacy action effect overload still works", legacyActionCreateAllowed.ok == true)
+	check("action effect forbids action-specific boundary", actionTouchForbidden.ok == false and actionTouchForbidden.name == "ForbiddenTouch")
+
+	local batch = permissionContract:checkEffects({
+		{
+			kind = "read",
+			target = "Player.Profile.Level",
+		},
+		{
+			kind = "write",
+			target = "Player.Profile.Level",
+		},
+	})
+	check("batch effects return all results", batch.ok == false and #batch.results == 2 and #batch.failures == 1)
+
+	local actionBatch = permissionContract:checkActionEffects("GrantItem", {
+		{
+			kind = "read",
+			target = "Player.Profile.Public.DisplayName",
+		},
+		{
+			kind = "destroy",
+			target = "Player.Inventory.Currency",
+		},
+	})
+	check("action batch effects apply action boundaries", actionBatch.ok == false and actionBatch.failures[1].name == "DestroyNotAllowed")
+
+	local permissiveContract = Contracts.system("PermissiveService")
+	local permissiveRead = permissiveContract:checkRead("Anywhere.Path")
+	local strictDenied = Contracts.system("StrictService")
+		:strictPermissions()
+		:checkRead("Anywhere.Path")
+	check("non-strict empty permissions preserve compatibility", permissiveRead.ok == true)
+	check("strict empty permissions deny by default", strictDenied.ok == false and strictDenied.name == "ReadNotAllowed")
 
 	test:section("ActionBoundRemotes")
 

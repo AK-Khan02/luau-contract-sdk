@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.6.0
+luau-contract-sdk/core@0.7.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -64,6 +64,28 @@ src/
 Use the SDK core to define systems and actions. Route meaningful runtime work
 through `System:runAction`, and use the Roblox adapters only at concrete
 boundaries such as remote handlers, object ownership, and overlay state.
+
+Use `strictPermissions()` once a system has declared its intended read/write
+surface. In strict mode, undeclared reads and writes fail:
+
+```lua
+local Contract = Contracts.system("InventoryService")
+	:strictPermissions()
+	:mayRead("Catalog.Items")
+	:mayWrite("Player.Inventory")
+
+Contract:checkRead("Catalog.Items.Rifle", diagnostics)
+Contract:checkWrite("Player.Inventory.Items.Rifle", diagnostics)
+```
+
+Action-specific permission checks narrow the system-level capability:
+
+```lua
+Contract:checkActionEffect("GrantItem", {
+	kind = "write",
+	target = "Player.Inventory.Items.Rifle",
+}, diagnostics)
+```
 
 ## Diagnostics Hook
 

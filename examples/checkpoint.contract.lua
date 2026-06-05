@@ -11,6 +11,7 @@ return Contracts.system("CheckpointService")
 	:ownsTag("CheckpointSpawn")
 	:mayRead("Workspace.Checkpoints")
 	:mayWrite("Player.RespawnLocation")
+	:strictPermissions()
 	:postcondition("RespawnLocationMatchesCheckpoint", function(context)
 		return context.player ~= nil and context.player.RespawnLocation == context.checkpointSpawn
 	end)
