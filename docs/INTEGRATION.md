@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.9.0
+luau-contract-sdk/core@0.10.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -42,6 +42,8 @@ expect Roblox-like values:
 - `RemoteGuard` expects a server-directed `RemoteEvent` with
   `OnServerEvent:Connect` or a RemoteFunction-like value when a response schema
   is declared. Action-bound remotes run through `System:runAction`.
+- `Runtime` owns application handlers, named lifecycle sessions, remote
+  connections, diagnostics, and a stable runtime report.
 - `Ownership` expects an Instance-like value with `SetAttribute`, `GetAttribute`,
   and optionally `Destroy`.
 - `PostconditionRunner` wraps code that only needs post-action checks.
@@ -61,9 +63,10 @@ src/
       Spawn.contract.lua
 ```
 
-Use the SDK core to define systems and actions. Route meaningful runtime work
-through `System:runAction`, and use the Roblox adapters only at concrete
-boundaries such as remote handlers, object ownership, and overlay state.
+Use the SDK core to define systems and actions. Create one runtime for each
+system instance that owns handlers, diagnostics, sessions, and remote bindings.
+Use Roblox adapters only at concrete boundaries such as object ownership and
+overlay state.
 
 Use lifecycle sessions for stateful flows such as rounds, deploys, matchmaking,
 or per-player setup:
@@ -73,29 +76,37 @@ local session = Contract:lifecycleSession({
 	Match = "Lobby",
 })
 
-Contract:runAction("StartRound", {
-	session = session,
-	expectedRevision = session:revision(),
+local runtime = Contracts.runtime(Contract, {
 	diagnostics = diagnostics,
-}, function()
+	sessions = {
+		match = session,
+	},
+})
+
+runtime:implement("StartRound", function()
 	return startRound()
 end)
-```
 
-Remote adapters can receive either one shared session or a resolver:
-
-```lua
-RemoteGuard.connect(Contract, "DeployRemote", remote, handler, {
-	sessionFor = function(player)
-		return playerSessions[player.UserId]
-	end,
-	revision = function(player, payload)
-		return payload.Revision
-	end,
+runtime:invoke("StartRound", {
+	sessionName = "match",
+	expectedRevision = session:revision(),
 })
 ```
 
-Remote declarations can name the session resolver directly:
+Runtime sessions can be shared objects or request-aware resolvers:
+
+```lua
+local runtime = Contracts.runtime(Contract, {
+	sessions = {
+		player = function(request)
+			return playerSessions[request.actor.UserId]
+		end,
+	},
+})
+```
+
+Remote declarations can name the session resolver directly, and runtime binding
+will pass that name through to the remote guard:
 
 ```lua
 Contract
@@ -118,13 +129,20 @@ Contract
 		},
 	})
 
-RemoteGuard.connect(Contract, "GrantItem", remoteFunction, handler, {
+local runtime = Contracts.runtime(Contract, {
 	sessions = {
-		inventory = function(player)
-			return inventorySessions[player.UserId]
+		inventory = function(request)
+			return inventorySessions[request.actor.UserId]
 		end,
 	},
 })
+
+runtime:implement("GrantItem", function(scope)
+	local payload = scope:payload()
+	return grantItem(scope:actor(), payload.ItemId)
+end)
+
+runtime:bindRemote("GrantItem", remoteFunction)
 ```
 
 Use `strictPermissions()` once a system has declared its intended read/write

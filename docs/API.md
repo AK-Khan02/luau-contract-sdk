@@ -169,6 +169,112 @@ The action scope passed to the handler exposes:
 - `scope:touch(path, toucherOrValue)`
 - `scope:effects()`
 
+## Runtime
+
+`Runtime` is the recommended execution boundary for application code. It keeps
+contract declarations separate from implementation functions, resolves named
+lifecycle sessions, runs actions through `System:runAction`, binds remotes
+through `RemoteGuard`, and exposes a serializable runtime report.
+
+```lua
+local diagnostics = Contracts.diagnostics()
+local runtime = Contracts.runtime(Contract, {
+	diagnostics = diagnostics,
+	sessions = {
+		player = function(request)
+			return playerSessions[request.actor.UserId]
+		end,
+	},
+})
+
+runtime:implement("WeaponAction", function(scope, _request)
+	local payload = scope:payload()
+
+	return scope:write("Player.Backpack", function()
+		return {
+			accepted = payload.Action == "Fire",
+		}
+	end)
+end)
+
+local result = runtime:invoke("WeaponAction", {
+	actor = player,
+	payload = {
+		Action = "Fire",
+		WeaponId = "Rifle",
+	},
+	context = {
+		character = character,
+		weaponCount = 1,
+	},
+	sessionName = "player",
+	expectedRevision = playerSessions[player.UserId]:revision(),
+})
+```
+
+Runtime action handlers receive `(scope, request)`. The `scope` is the normal
+guarded action scope. The request is a normalized plain table with:
+
+- `action`
+- `actor`
+- `payload`
+- `context`
+- `diagnostics`
+- `session`
+- `sessionName`
+- `states`
+- `expectedRevision`
+- `remote`
+
+Useful runtime methods:
+
+- `Contracts.runtime(contract, options)`
+- `Runtime.new(contract, options)`
+- `runtime:implement(actionName, handler, options)`
+- `runtime:invoke(actionName, request)`
+- `runtime:session(name, sessionOrResolver)`
+- `runtime:bindRemote(remoteName, remoteObject, options)`
+- `runtime:bindRemotes(remoteMap, options)`
+- `runtime:describe()`
+- `runtime:destroy()`
+
+`runtime:implement` rejects unknown actions and duplicate implementations unless
+`options.overwrite = true` is passed. `runtime:invoke` fails loudly when an action
+has no implementation because that is a setup error, not a player input error.
+
+Named sessions can be provided as a session object or as a resolver function. A
+resolver receives the normalized runtime request. For remotes, `request.actor` is
+the player and `request.payload` is the remote payload.
+
+Action-bound remotes can be bound without repeating the action handler:
+
+```lua
+runtime:bindRemote("WeaponAction", WeaponActionRemote)
+```
+
+For remotes declared without an action, pass an explicit handler:
+
+```lua
+runtime:bindRemote("Ping", PingRemote, {
+	handler = function(player, payload)
+		return {
+			ok = true,
+		}
+	end,
+})
+```
+
+`runtime:describe()` returns only serializable report data:
+
+```lua
+local report = runtime:describe()
+
+print(report.system.name)
+print(report.implementedActions[1])
+print(report.boundRemotes[1])
+print(report.destroyed)
+```
+
 ## Lifecycle Sessions
 
 `Lifecycle` defines valid states and transitions. `LifecycleSession` owns the

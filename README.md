@@ -12,6 +12,7 @@ become fragile over time:
 - actor and admin policies
 - lifecycle state transitions
 - postconditions and diagnostics
+- runtime handlers and remote binding
 - contract reports for Studio tooling and docs
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
@@ -70,10 +71,14 @@ local GrantItemSchema = Contracts.object({
 local InventoryContract = Contracts.system("InventoryService")
 	:remote("GrantItem", GrantItemSchema)
 
-RemoteGuard.connect(InventoryContract, "GrantItem", GrantItem, function(player, payload)
-	InventoryService.grant(player, payload.ItemId)
-end, {
+local runtime = Contracts.runtime(InventoryContract, {
 	diagnostics = diagnostics,
+})
+
+runtime:bindRemote("GrantItem", GrantItem, {
+	handler = function(player, payload)
+		InventoryService.grant(player, payload.ItemId)
+	end,
 })
 ```
 
@@ -121,14 +126,11 @@ local InventoryContract = Contracts.system("InventoryService")
 		postconditions = { "InventoryContainsGrantedItem" },
 	})
 
-local result = InventoryContract:runAction("GrantItem", {
-	actor = player,
-	payload = payload,
-	context = {
-		inventory = player.Inventory,
-	},
+local runtime = Contracts.runtime(InventoryContract, {
 	diagnostics = diagnostics,
-}, function(scope)
+})
+
+runtime:implement("GrantItem", function(scope)
 	local itemId = scope:read("Catalog.Items", function(context)
 		return context.payload.ItemId
 	end)
@@ -141,6 +143,14 @@ local result = InventoryContract:runAction("GrantItem", {
 		}
 	end)
 end)
+
+local result = runtime:invoke("GrantItem", {
+	actor = player,
+	payload = payload,
+	context = {
+		inventory = player.Inventory,
+	},
+})
 ```
 
 The action now validates input, validates output, tracks effects, enforces the
@@ -217,13 +227,21 @@ local session = MatchContract:lifecycleSession({
 	Match = "Lobby",
 })
 
-MatchContract:runAction("StartRound", {
-	session = session,
-	expectedRevision = session:revision(),
+local runtime = Contracts.runtime(MatchContract, {
+	sessions = {
+		match = session,
+	},
 	diagnostics = diagnostics,
-}, function()
+})
+
+runtime:implement("StartRound", function()
 	return startRound()
 end)
+
+runtime:invoke("StartRound", {
+	sessionName = "match",
+	expectedRevision = session:revision(),
+})
 ```
 
 Lifecycle sessions protect against stale, duplicate, and out-of-order events.
@@ -273,18 +291,24 @@ local InventoryContract = Contracts.system("InventoryService")
 		},
 	})
 
-RemoteGuard.connect(InventoryContract, "GrantItem", GrantItemRemote, handler, {
+local runtime = Contracts.runtime(InventoryContract, {
 	sessions = {
-		inventory = function(player)
-			return inventorySessions[player.UserId]
+		inventory = function(request)
+			return inventorySessions[request.actor.UserId]
 		end,
 	},
 	diagnostics = diagnostics,
 })
+
+runtime:implement("GrantItem", function(scope)
+	return grantItem(scope:actor(), scope:payload().ItemId)
+end)
+
+runtime:bindRemote("GrantItem", GrantItemRemote)
 ```
 
-Remote policy metadata binds the remote to its action, actor policy, response
-schema, lifecycle session, revision check, and rate limit.
+Runtime binding routes the remote through the action contract, actor policy,
+response schema, lifecycle session, revision check, and rate limit.
 
 ### Diagnostics And Reports
 
@@ -299,6 +323,7 @@ With SDK:
 ```lua
 local diagnostics = Contracts.diagnostics({ capacity = 100 })
 local overlay = Contracts.OverlayFeed.new(diagnostics, { maxRows = 8 })
+local runtimeReport = runtime:describe()
 
 local report = InventoryContract:describe()
 local studioReport = Contracts.Studio.StudioReport.fromContracts({
@@ -308,6 +333,7 @@ local studioReport = Contracts.Studio.StudioReport.fromContracts({
 })
 
 print(overlay:text())
+print(runtimeReport.system.name)
 ```
 
 Diagnostics are structured. Contract reports are serializable. Studio tooling can
@@ -318,6 +344,8 @@ consume the same contract model that runtime guards use.
 - `Schema`: validates payloads, action inputs, outputs, and remote responses.
 - `System`: names a game system and declares its ownership, permissions,
   actions, remotes, policies, postconditions, and lifecycles.
+- `Runtime`: owns action implementations, named lifecycle sessions, remote
+  connections, diagnostics, and runtime reports.
 - `Action`: wraps meaningful work in one guarded path.
 - `ActionScope`: records and enforces reads, writes, creates, destroys, and
   touches during an action.
@@ -349,6 +377,7 @@ src/
     OverlayFeed.lua
     RateLimiter.lua
     RemotePolicy.lua
+    Runtime.lua
     Schema.lua
     StaticScanner.lua
     System.lua

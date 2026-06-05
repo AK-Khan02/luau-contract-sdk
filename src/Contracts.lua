@@ -7,6 +7,7 @@ local OverlayFeed = require("./Core/OverlayFeed")
 local Package = require("./Package")
 local RateLimiter = require("./Core/RateLimiter")
 local Roblox = require("./Roblox")
+local Runtime = require("./Core/Runtime")
 local Schema = require("./Core/Schema")
 local StaticScanner = require("./Core/StaticScanner")
 local Studio = require("./Studio")
@@ -22,6 +23,7 @@ local Contracts = {
 	Package = Package,
 	RateLimiter = RateLimiter,
 	Roblox = Roblox,
+	Runtime = Runtime,
 	Schema = Schema,
 	StaticScanner = StaticScanner,
 	Studio = Studio,
@@ -39,6 +41,10 @@ end
 
 function Contracts.lifecycleSession(systemContract, initialStates, options)
 	return LifecycleSession.new(systemContract, initialStates, options)
+end
+
+function Contracts.runtime(systemContract, options)
+	return Runtime.new(systemContract, options)
 end
 
 function Contracts.system(name)
