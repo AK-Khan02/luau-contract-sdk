@@ -1,30 +1,35 @@
 # Luau Contract SDK
 
-A small but powerful Luau SDK for making Roblox game systems safer, easier to
-reason about, and easier to inspect.
+A compact Luau contract runtime for Roblox game systems. It turns remote calls,
+server actions, permissions, lifecycle state, diagnostics, and reports into one
+executable contract instead of scattered defensive checks.
 
-The SDK helps you define contracts around the parts of game code that usually
-become fragile over time:
+The SDK is built for game systems where a bad call can mutate player data, grant
+items twice, run in the wrong match state, bypass an admin check, or fail without
+leaving useful diagnostics.
 
-- remote payloads and responses
-- server actions that mutate game state
+Use it to define and enforce:
+
+- remote payload and response schemas
+- guarded server actions for important mutations
 - read/write/effect permissions
 - actor and admin policies
-- lifecycle state transitions
-- postconditions and diagnostics
-- runtime handlers and remote binding
-- contract reports for Studio tooling and docs
+- lifecycle state requirements and transitions
+- preconditions, postconditions, and named diagnostics
+- runtime handlers, lifecycle sessions, and remote binding
+- stable reports for overlays, docs, tests, and Studio tooling
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
 under `src/Roblox`.
 
 ## Why Use It
 
-Large game systems often start with simple handlers and direct mutation. That
-works until the same system has several remotes, admin paths, retries, stale
-events, and partially failed updates.
+Roblox code often grows around remotes first: validate a payload here, check an
+admin there, mutate a table, return a result, maybe print a warning. That works
+while the system is small. It becomes fragile when the same feature has several
+entry points, retries, lifecycle timing, rate limits, and stateful side effects.
 
-Luau Contract SDK gives those flows one explicit contract:
+Luau Contract SDK gives those flows one enforced runtime boundary:
 
 - What input is valid?
 - Who may call this?
@@ -34,10 +39,27 @@ Luau Contract SDK gives those flows one explicit contract:
 - What response shape should go back to the caller?
 - What diagnostic should be recorded when the contract is violated?
 
-The goal is not to replace your game logic. The goal is to wrap important game
-logic in a guard that is declarative, testable, and inspectable.
+The game logic stays yours. The SDK wraps the risky boundary around it so the
+rules are declared once, enforced consistently, tested directly, and exposed as
+plain report data.
+
+That gives you:
+
+- safer remotes: payloads, responses, actors, lifecycle guards, and rate limits
+  are checked before game code trusts the call.
+- safer mutations: actions can only read, write, create, destroy, or touch the
+  paths they declared.
+- safer state machines: stale, duplicate, and out-of-order events fail before
+  they advance a lifecycle session.
+- better failures: violations are named diagnostics that tools, tests, overlays,
+  and reports can consume.
+- better architecture: contract definitions, runtime handlers, Roblox adapters,
+  and reporting stay separate but connected by one model.
 
 ## Before / With SDK
+
+These examples show the same pattern: move scattered defensive code into a
+contract, then route execution through `Contracts.runtime(...)`.
 
 ### Remote Payload Validation
 
@@ -83,7 +105,8 @@ runtime:bindRemote("GrantItem", GrantItem, {
 ```
 
 Invalid payloads are rejected consistently and recorded as diagnostics instead
-of being handled differently in every remote.
+of being handled differently in every remote. The remote handler can focus on the
+actual game operation because the boundary already normalized the call.
 
 ### Guarded State Mutation
 
@@ -153,8 +176,10 @@ local result = runtime:invoke("GrantItem", {
 })
 ```
 
-The action now validates input, validates output, tracks effects, enforces the
-declared write boundary, and checks the postcondition.
+The action now validates input, validates output, records effects, enforces the
+declared write boundary, and checks the postcondition. Tests can assert the
+contract behavior without needing to simulate every Roblox object involved in the
+real game.
 
 ### Permission Boundaries
 
@@ -184,8 +209,9 @@ local ok = InventoryContract:checkActionEffect("GrantItem", {
 }, diagnostics)
 ```
 
-The SDK makes permission mistakes visible. In strict mode, undeclared reads and
-writes fail instead of silently spreading across systems.
+The SDK makes permission mistakes visible before they become architectural drift.
+In strict mode, undeclared reads and writes fail instead of silently spreading
+across systems.
 
 ### Lifecycle State Enforcement
 
@@ -245,7 +271,8 @@ runtime:invoke("StartRound", {
 ```
 
 Lifecycle sessions protect against stale, duplicate, and out-of-order events.
-Transitions only commit after the action succeeds.
+Transitions only commit after the action succeeds, so failed handlers, bad
+outputs, and failed postconditions do not advance game state.
 
 ### Remote Policies
 
@@ -308,7 +335,8 @@ runtime:bindRemote("GrantItem", GrantItemRemote)
 ```
 
 Runtime binding routes the remote through the action contract, actor policy,
-response schema, lifecycle session, revision check, and rate limit.
+response schema, lifecycle session, revision check, and rate limit. The handler
+stays small because the remote policy owns the boundary rules.
 
 ### Diagnostics And Reports
 
@@ -336,8 +364,9 @@ print(overlay:text())
 print(runtimeReport.system.name)
 ```
 
-Diagnostics are structured. Contract reports are serializable. Studio tooling can
-consume the same contract model that runtime guards use.
+Diagnostics are structured. Contract and runtime reports are serializable. Studio
+tooling, overlays, tests, and docs can consume the same model that runtime guards
+use.
 
 ## Core Concepts
 
