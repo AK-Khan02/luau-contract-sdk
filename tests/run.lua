@@ -12,6 +12,7 @@ local suites = {
 	require("./suites/runtime"),
 	require("./suites/adapters_examples"),
 	require("./suites/scanner_studio"),
+	require("./suites/host_tools"),
 }
 
 local test = TestHarness.new()

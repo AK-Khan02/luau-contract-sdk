@@ -21,6 +21,7 @@ return function(test)
 	check("package root exports studio report", PackageRoot.Studio.StudioReport == Contracts.Studio.StudioReport)
 	check("package root exports lifecycle sessions", PackageRoot.LifecycleSession == Contracts.LifecycleSession)
 	check("package root exports runtime", PackageRoot.Runtime == Contracts.Runtime)
+	check("package root exports host tools", PackageRoot.Host.ScanRunner ~= nil)
 
 	test:section("Schema")
 

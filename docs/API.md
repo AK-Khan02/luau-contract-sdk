@@ -734,6 +734,44 @@ local report = Contracts.Studio.StudioReport.fromContracts({
 })
 ```
 
+## Host Tools
+
+`Contracts.Host` contains pure Luau modules used by the CLI/CI host adapter.
+They do not read or write files.
+
+```lua
+local report = Contracts.Host.ScanRunner.run({
+	scripts = {
+		{
+			path = "ServerScriptService.MatchService",
+			className = "Script",
+			source = sourceText,
+		},
+	},
+	policy = {
+		failOn = "error",
+		baselineKeys = {},
+	},
+})
+
+print(report.policy.ok)
+print(Contracts.Host.JsonEncode.encode(report))
+```
+
+Host modules:
+
+- `Host.ScanRunner`: builds a Studio report from script metadata, attaches static
+  scanner rule metadata, includes exact contract reports supplied by the host,
+  and evaluates policy.
+- `Host.ReportPolicy`: evaluates fail thresholds, max warning counts, exact load
+  errors, and baseline-suppressed findings.
+- `Host.JsonEncode`: encodes serializable report tables for the generated Luau
+  runner used by the CLI.
+
+The executable host command is `tools/luau-contract.js`. It owns filesystem
+project discovery, config loading, subprocess execution, report writing, and CI
+exit codes.
+
 ## Roblox Adapters
 
 Adapters are available from the package root:

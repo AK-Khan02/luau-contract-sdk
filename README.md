@@ -19,6 +19,7 @@ Use it to define and enforce:
 - preconditions, postconditions, and named diagnostics
 - runtime handlers, lifecycle sessions, and remote binding
 - stable reports for overlays, docs, tests, and Studio tooling
+- CLI and CI reports for Roblox projects
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
 under `src/Roblox`.
@@ -417,6 +418,11 @@ src/
   Studio/
     init.lua
     StudioReport.lua
+  Host/
+    init.lua
+    JsonEncode.lua
+    ReportPolicy.lua
+    ScanRunner.lua
   Roblox/
     init.lua
     Ownership.lua
@@ -434,6 +440,10 @@ tests/
 plugin/
   LuauContractStudioPlugin.lua
   LuauContractPluginModel.lua
+tools/
+  luau-contract.js
+  lib/
+  tests/
 ```
 
 ## Validation
@@ -442,6 +452,8 @@ Run the pure test suite and analyzer:
 
 ```sh
 luau tests/run.lua
+node --test tools/tests/*.test.js
+node tools/luau-contract.js scan --fail-on error
 luau-analyze src/**/*.lua examples/**/*.lua tests/**/*.lua plugin/*.lua
 ```
 
@@ -465,6 +477,44 @@ postconditions, and lifecycle transition checks pass.
 
 The static scanner can also flag risky source patterns such as raw remote
 handlers, raw remote firing, broad cleanup, and unowned destroys.
+
+## CLI And CI
+
+The SDK includes a host command for local scans and CI gates:
+
+```sh
+node tools/luau-contract.js scan
+node tools/luau-contract.js scan --format json --out reports/contracts.json
+node tools/luau-contract.js scan --format sarif --out reports/contracts.sarif
+node tools/luau-contract.js scan --format markdown --out docs/contracts.md
+```
+
+The command reads Roblox project files, passes script metadata into the pure
+Luau `Contracts.Host.ScanRunner`, and exits nonzero when policy fails.
+Standalone Luau runtimes do not expose portable file IO, so filesystem and CI
+behavior live in the Node host adapter while scanner/report logic stays in Luau.
+
+Useful CI gates:
+
+```sh
+node tools/luau-contract.js scan --fail-on error
+node tools/luau-contract.js scan --fail-on warn --max-warnings 0
+node tools/luau-contract.js scan --baseline reports/contracts-baseline.json
+```
+
+Use exact mode when contract modules are pure declarations that can be safely
+required outside Studio:
+
+```sh
+node tools/luau-contract.js scan \
+	--exact \
+	--contract-module "examples/*.contract.lua" \
+	--format markdown \
+	--out docs/contracts.md
+```
+
+The default static scan does not require game modules. Exact mode is opt-in
+because requiring arbitrary gameplay modules can run setup code.
 
 ## License
 

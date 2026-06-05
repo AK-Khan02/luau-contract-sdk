@@ -27,6 +27,11 @@ export type Report = {
 
 export type Rule = {
 	id: string,
+	title: string?,
+	severity: string?,
+	category: string?,
+	remediation: string?,
+	docs: string?,
 	scan: ({Finding}, {string}, string) -> (),
 }
 
@@ -265,23 +270,59 @@ end
 local RULES: {Rule} = {
 	{
 		id = "raw-remote-handler",
+		title = "Raw remote server handler",
+		severity = "error",
+		category = "remote",
+		remediation = "Wrap server remote handlers with RemoteGuard.connect or Runtime:bindRemote so payload validation, actor policy, lifecycle checks, and rate limits run before game code.",
+		docs = "docs/API.md#remote-contracts",
 		scan = scanRawRemoteHandlers,
 	},
 	{
 		id = "raw-remote-fire",
+		title = "Raw remote fire",
+		severity = "warn",
+		category = "remote",
+		remediation = "Pair remote firing with an explicit contract boundary and documented payload schema.",
+		docs = "docs/API.md#remote-contracts",
 		scan = scanRawRemoteFires,
 	},
 	{
 		id = "broad-cleanup",
+		title = "Broad cleanup without ownership clue",
+		severity = "error",
+		category = "ownership",
+		remediation = "Scope cleanup to a contract-owned folder or prove ownership before clearing descendants.",
+		docs = "docs/API.md#permission-capabilities",
 		scan = scanBroadCleanup,
 	},
 	{
 		id = "unowned-destroy",
+		title = "Destroy without ownership proof",
+		severity = "warn",
+		category = "ownership",
+		remediation = "Use Ownership.destroyOwned, Ownership.assertOwned, an owned folder, or a ContractOwner attribute check before destroying instances.",
+		docs = "docs/INTEGRATION.md#runtime-boundary",
 		scan = scanUnsafeDestroy,
 	},
 	{
 		id = "async-without-token",
+		title = "Async callback without stale guard",
+		severity = "warn",
+		category = "lifecycle",
+		remediation = "Check a token, run id, generation id, request id, or lifecycle state before async callbacks mutate state.",
+		docs = "docs/API.md#lifecycle-sessions",
 		scan = scanAsyncWithoutToken,
+	},
+}
+
+local EMITTED_RULE_METADATA = {
+	{
+		id = "workspace-clear-all",
+		title = "Workspace clear all",
+		severity = "error",
+		category = "ownership",
+		remediation = "Never call Workspace:ClearAllChildren from gameplay code; scope cleanup to a contract-owned folder.",
+		docs = "docs/API.md#permission-capabilities",
 	},
 }
 
@@ -322,6 +363,31 @@ function StaticScanner.rules(): {Rule}
 		copy[index] = rule
 	end
 	return copy
+end
+
+function StaticScanner.ruleMetadata(): {[string]: any}
+	local metadata = {}
+	for _, rule in ipairs(RULES) do
+		metadata[rule.id] = {
+			id = rule.id,
+			title = rule.title,
+			severity = rule.severity,
+			category = rule.category,
+			remediation = rule.remediation,
+			docs = rule.docs,
+		}
+	end
+	for _, rule in ipairs(EMITTED_RULE_METADATA) do
+		metadata[rule.id] = {
+			id = rule.id,
+			title = rule.title,
+			severity = rule.severity,
+			category = rule.category,
+			remediation = rule.remediation,
+			docs = rule.docs,
+		}
+	end
+	return metadata
 end
 
 function StaticScanner.scanSource(source: string?, options: Options?): Report

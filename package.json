@@ -1,0 +1,12 @@
+{
+  "name": "luau-contract-sdk-tools",
+  "version": "0.11.0",
+  "private": true,
+  "bin": {
+    "luau-contract": "tools/luau-contract.js"
+  },
+  "scripts": {
+    "scan": "node tools/luau-contract.js scan",
+    "test:host": "node --test tools/tests/*.test.js"
+  }
+}

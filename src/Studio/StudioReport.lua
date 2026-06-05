@@ -122,9 +122,20 @@ end
 
 local function contractReports(contracts)
 	local reports = {}
-	for _, contract in ipairs(contracts or {}) do
+	for _, entry in ipairs(contracts or {}) do
+		local contract = entry
+		local path = nil
+		if type(entry) == "table" and entry.contract ~= nil then
+			contract = entry.contract
+			path = entry.path
+		end
+
 		if contract and type(contract.describe) == "function" then
-			table.insert(reports, contract:describe())
+			local report = contract:describe()
+			if path ~= nil then
+				report.path = path
+			end
+			table.insert(reports, report)
 		end
 	end
 	return reports

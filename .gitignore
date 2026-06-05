@@ -16,3 +16,6 @@ theinstruct*
 *.htm
 docs/*.html
 *explainer*.html
+.luau-contract-runner-*.lua
+luau-contract-project-*
+reports/

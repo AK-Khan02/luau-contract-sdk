@@ -8,6 +8,8 @@ Supported local validation:
 
 ```sh
 luau tests/run.lua
+node --test tools/tests/*.test.js
+node tools/luau-contract.js scan --fail-on error
 luau-analyze src/**/*.lua examples/**/*.lua tests/**/*.lua plugin/*.lua
 ```
 
@@ -215,6 +217,109 @@ local report = Contracts.StaticScanner.scanSource(sourceText, {
 The scanner does not read files itself. Standalone Luau runtimes can differ on
 whether file IO is available, so CI or host tooling should read source files and
 pass text into `scanSource`.
+
+## CLI / CI Host
+
+Use the bundled host command when a project needs filesystem discovery, report
+files, CI annotations, or policy exit codes:
+
+```sh
+node tools/luau-contract.js scan
+```
+
+The host command performs project discovery in Node, then generates a temporary
+Luau runner that calls `Contracts.Host.ScanRunner`. The temporary runner is
+deleted after the scan. Add `.luau-contract-runner-*.lua` to ignore rules in
+consumer repositories if you vendor the tool.
+
+Supported outputs:
+
+```sh
+node tools/luau-contract.js scan --format text
+node tools/luau-contract.js scan --format json --out reports/contracts.json
+node tools/luau-contract.js scan --format sarif --out reports/contracts.sarif
+node tools/luau-contract.js scan --format markdown --out docs/contracts.md
+```
+
+Multiple formats can be written together with `--out-dir`:
+
+```sh
+node tools/luau-contract.js scan \
+	--format text,json,sarif,markdown \
+	--out-dir reports/contracts
+```
+
+CI policy options:
+
+```sh
+node tools/luau-contract.js scan --fail-on error
+node tools/luau-contract.js scan --fail-on warn --max-warnings 0
+node tools/luau-contract.js scan --baseline reports/contracts-baseline.json
+node tools/luau-contract.js scan --update-baseline reports/contracts-baseline.json
+```
+
+Exit codes:
+
+- `0`: scan completed and policy passed.
+- `1`: scan completed and policy failed.
+- `2`: configuration, filesystem, subprocess, or internal tool error.
+
+Exact contract mode is opt-in:
+
+```sh
+node tools/luau-contract.js scan \
+	--exact \
+	--contract-module "src/contracts/**/*.contract.lua" \
+	--format markdown \
+	--out docs/contracts.md
+```
+
+Static mode scans source text only and is safe for arbitrary gameplay files.
+Exact mode requires configured contract modules and calls `contract:describe()`,
+so use it for pure contract declaration files rather than scripts with setup
+side effects.
+
+A project can store defaults in `luau-contracts.json`:
+
+```json
+{
+  "include": ["src/**/*.lua", "src/**/*.luau"],
+  "exclude": ["Packages/**", "DevPackages/**"],
+  "failOn": "error",
+  "contractModules": ["src/contracts/**/*.contract.lua"],
+  "report": {
+    "formats": ["text", "sarif"],
+    "outDir": "reports/contracts"
+  }
+}
+```
+
+GitHub Actions example:
+
+```yaml
+name: Contracts
+
+on:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Luau
+        run: echo "Install luau with your project's toolchain"
+      - name: Run contract scan
+        run: node tools/luau-contract.js scan --format sarif --out reports/contracts.sarif --fail-on error
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: reports/contracts.sarif
+```
 
 ## Studio Plugin Source
 

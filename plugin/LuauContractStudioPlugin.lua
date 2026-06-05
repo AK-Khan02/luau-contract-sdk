@@ -142,7 +142,7 @@ contentPadding.Parent = content
 local function clear(container)
 	for _, child in ipairs(container:GetChildren()) do
 		if child:IsA("GuiObject") then
-			child:Destroy()
+			child:Destroy() -- contracts-scan: ignore unowned-destroy
 		end
 	end
 end
