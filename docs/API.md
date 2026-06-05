@@ -24,6 +24,9 @@ local Contract = Contracts.system("CombatService")
 	:mayWrite("Player.Backpack")
 	:mustNeverTouch("Workspace.CurrentArena")
 	:strictPermissions()
+	:actorPolicy("player", function(actor)
+		return actor ~= nil
+	end)
 	:lifecycle("Player", PlayerLifecycle)
 	:precondition("CharacterLoaded", function(context)
 		return context.character ~= nil
@@ -54,6 +57,13 @@ local Contract = Contracts.system("CombatService")
 		remote = {
 			name = "WeaponAction",
 			direction = "server",
+			actor = "player",
+			response = Contracts.object({
+				accepted = Contracts.boolean(),
+			}),
+			lifecycle = {
+				session = "player",
+			},
 			rateLimit = {
 				maxRequests = 10,
 				windowSeconds = 5,
@@ -139,6 +149,7 @@ Useful action methods:
 - `contract:action(name, definition)`
 - `contract:actionOptions(name)`
 - `contract:hasAction(name)`
+- `contract:actorPolicy(name, check)`
 - `contract:validateActionInput(name, payload, diagnostics, context)`
 - `contract:validateActionOutput(name, value, diagnostics, context)`
 - `contract:validateActionContext(name, context, diagnostics)`
@@ -222,8 +233,8 @@ local session = Contracts.lifecycleSession(Match, {
 ## Permission Capabilities
 
 `mayRead`, `mayWrite`, and `mustNeverTouch` are enforceable capabilities.
-Without strict mode, empty read/write lists preserve compatibility and allow
-access. With `strictPermissions()`, empty read/write lists deny by default.
+Without strict mode, empty read/write lists allow access by default. With
+`strictPermissions()`, empty read/write lists deny by default.
 
 ```lua
 local Inventory = Contracts.system("InventoryService")
@@ -310,6 +321,52 @@ When an action declares `remote = { name = "WeaponAction" }`, the system
 automatically registers that remote with the action input schema and stores the
 action binding in `remoteOptions`.
 
+Remote declarations support richer policy metadata:
+
+```lua
+Contract
+	:actorPolicy("admin", function(player)
+		return Admins[player.UserId] == true
+	end)
+	:remote("GrantItem", GrantItemSchema, {
+		action = "GrantItem",
+		direction = "server",
+		actor = "admin",
+		response = GrantItemResultSchema,
+		lifecycle = {
+			session = "inventory",
+			revision = "Revision",
+		},
+		rateLimit = {
+			maxRequests = 4,
+			windowSeconds = 1,
+			key = "payload.ItemId",
+		},
+	})
+```
+
+Supported remote policy fields:
+
+- `action`: action name to run through `System:runAction`.
+- `direction`: `server`, `client`, or `bidirectional`.
+- `actor`: `required`, a named actor policy, a policy table, or a function.
+- `response`: schema for RemoteFunction return values.
+- `lifecycle.session`: named session resolver used by `RemoteGuard`.
+- `lifecycle.revision`: payload field path or resolver for stale revision checks.
+- `rateLimit.maxRequests`
+- `rateLimit.windowSeconds`
+- `rateLimit.key`: defaults to actor; also supports `global`, `remote`, and
+  `payload.FieldName`.
+
+Useful remote methods:
+
+- `contract:remote(name, schema, options)`
+- `contract:remoteOptions(name)`
+- `contract:actionForRemote(name)`
+- `contract:validateRemote(name, payload, diagnostics, context)`
+- `contract:validateRemoteResponse(name, value, diagnostics, context)`
+- `contract:checkRemoteActor(name, actor, context, diagnostics)`
+
 ## Schemas
 
 Supported schema builders:
@@ -329,6 +386,42 @@ Supported schema builders:
 - `Contracts.custom(name, validator)`
 
 All validators return `{ ok, reason, value, path }`.
+
+`Contracts.Schema.describe(schema)` returns a serializable schema description.
+Custom schemas report as `{ kind = "custom", name = "..." }` without exposing
+their validator function.
+
+## Stable System Reports
+
+`contract:describe()` returns a plain serializable report for docs, tests, and
+Studio tooling.
+
+```lua
+local report = Contract:describe()
+
+print(report.formatVersion)
+print(report.remotes.GrantItem.action)
+print(report.remotes.GrantItem.response.kind)
+print(report.actions.GrantItem.lifecycle.requires.Inventory)
+```
+
+The report contains:
+
+- `formatVersion`
+- `name`
+- `ownership`
+- `permissions`
+- `actions`
+- `remotes`
+- `preconditions`
+- `postconditions`
+- `lifecycles`
+- `actorPolicies`
+
+Schemas, lifecycle definitions, remote policies, actor policy references, and
+rate limits are described as plain tables. Runtime functions are represented by
+metadata such as `{ kind = "function" }` rather than being embedded in the
+report.
 
 ## Diagnostics
 
@@ -439,11 +532,20 @@ The report contains:
 
 - `summary`
 - `systems`
+- `contracts`
 - `diagnostics`
 - `scanner.findings`
 - `scanner.summary`
 
 This is the pure model used by the Studio plugin source.
+
+When live contract modules are already available, use:
+
+```lua
+local report = Contracts.Studio.StudioReport.fromContracts({
+	Contract,
+})
+```
 
 ## Roblox Adapters
 
@@ -460,8 +562,10 @@ The core package remains Roblox-free. Adapters are the only layer that expects
 RemoteEvent-like or Instance-like values.
 
 `RemoteGuard.connect` detects action-bound remotes and routes them through
-`System:runAction`. Handlers for action-bound remotes receive
-`(player, payload, scope)`.
+`System:runAction`. It connects RemoteEvent-like values with
+`OnServerEvent:Connect`, and uses a RemoteFunction-style `OnServerInvoke`
+handler when a response schema is declared. Handlers for action-bound remotes
+receive `(player, payload, scope)`.
 
 Action-bound remotes can use a shared lifecycle session:
 
@@ -481,5 +585,18 @@ RemoteGuard.connect(Match, "DeployRemote", remote, handler, {
 	revision = function(player, payload)
 		return payload.Revision
 	end,
+})
+```
+
+If the remote declaration names `lifecycle.session`, provide a resolver in
+`sessions`:
+
+```lua
+RemoteGuard.connect(Match, "DeployRemote", remoteFunction, handler, {
+	sessions = {
+		match = function(player, payload)
+			return matchSessions[payload.MatchId]
+		end,
+	},
 })
 ```

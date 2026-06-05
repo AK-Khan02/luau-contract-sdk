@@ -1,7 +1,9 @@
 --!strict
 
 local ActionScope = require("./ActionScope")
+local ContractReport = require("./ContractReport")
 local LifecycleSession = require("./LifecycleSession")
+local RemotePolicy = require("./RemotePolicy")
 local Schema = require("./Schema")
 
 export type ActionDescription = {
@@ -25,17 +27,22 @@ export type ActionDescription = {
 
 export type Description = {
 	name: string,
-	ownedTags: {string},
-	ownedFolders: {string},
-	mayRead: {string},
-	mayWrite: {string},
-	mustNeverTouch: {string},
-	strictPermissions: boolean,
+	ownership: {
+		tags: {string},
+		folders: {string},
+	},
+	permissions: {
+		strict: boolean,
+		mayRead: {string},
+		mayWrite: {string},
+		mustNeverTouch: {string},
+	},
 	actions: {[string]: ActionDescription},
 	remotes: {[string]: any},
 	preconditions: {string},
 	postconditions: {string},
 	lifecycles: {[string]: any},
+	actorPolicies: {string},
 }
 
 local System: any = {}
@@ -439,6 +446,7 @@ function System.new(name: string): any
 		_postconditions = {},
 		_postconditionChecks = {},
 		_lifecycles = {},
+		_actorPolicies = {},
 	}, System)
 end
 
@@ -482,11 +490,7 @@ function System.strictPermissions(self: any, enabled: boolean?): any
 end
 
 function System.remote(self: any, remoteName: string, schema: any, options: any?): any
-	assertName("Remote name", remoteName)
-	self._remotes[remoteName] = {
-		schema = schema,
-		options = options or {},
-	}
+	self._remotes[remoteName] = RemotePolicy.normalize(remoteName, schema, options)
 	return self
 end
 
@@ -496,13 +500,10 @@ function System.action(self: any, actionName: string, definition: any): any
 	self._actions[actionName] = action
 
 	if action.remote ~= nil then
-		local remote = copyMap(action.remote)
-		local remoteName = remote.name
-		remote.name = nil
-		self._remotes[remoteName] = {
-			schema = action.input or Schema.any(),
-			options = remote,
-		}
+		local remoteName = action.remote.name
+		local remote = RemotePolicy.normalize(remoteName, action.input or Schema.any(), action.remote, actionName)
+		action.remote = remote
+		self._remotes[remoteName] = remote
 	end
 
 	return self
@@ -550,12 +551,22 @@ function System.postcondition(self: any, name: string, check: (any) -> any): any
 	return self
 end
 
+function System.actorPolicy(self: any, name: string, check: (any, any) -> any): any
+	assertName("Actor policy name", name)
+	if type(check) ~= "function" then
+		error("Actor policy check must be a function", 2)
+	end
+
+	self._actorPolicies[name] = check
+	return self
+end
+
 function System.remoteOptions(self: any, remoteName: string): any?
 	local remote = self._remotes[remoteName]
 	if not remote then
 		return nil
 	end
-	return copyMap(remote.options)
+	return RemotePolicy.options(remote)
 end
 
 function System.actionOptions(self: any, actionName: string): any?
@@ -575,11 +586,7 @@ function System.actionForRemote(self: any, remoteName: string): string?
 	if remote == nil then
 		return nil
 	end
-	local options = remote.options
-	if options == nil then
-		return nil
-	end
-	return options.action :: string?
+	return remote.action :: string?
 end
 
 function System.validateRemote(self: any, remoteName: string, payload: any, diagnostics: any?, context: any?): any
@@ -609,6 +616,48 @@ function System.validateRemote(self: any, remoteName: string, payload: any, diag
 			category = "remote",
 			system = self._name,
 			name = "RemotePayloadInvalid",
+			message = validation.reason,
+			context = context or {
+				remote = remoteName,
+			},
+		})
+	end
+	return validation
+end
+
+function System.validateRemoteResponse(self: any, remoteName: string, value: any, diagnostics: any?, context: any?): any
+	local remote = self._remotes[remoteName]
+	if not remote then
+		local message = "unknown remote contract: " .. tostring(remoteName)
+		recordViolation(diagnostics, {
+			level = "error",
+			category = "remote",
+			system = self._name,
+			name = "UnknownRemote",
+			message = message,
+			context = context or {
+				remote = remoteName,
+			},
+		})
+		return {
+			ok = false,
+			reason = message,
+		}
+	end
+	if remote.response == nil then
+		return {
+			ok = true,
+			value = value,
+		}
+	end
+
+	local validation = Schema.validate(remote.response, value, "response")
+	if not validation.ok then
+		recordViolation(diagnostics, {
+			level = "error",
+			category = "remote",
+			system = self._name,
+			name = "RemoteResponseInvalid",
 			message = validation.reason,
 			context = context or {
 				remote = remoteName,
@@ -1299,6 +1348,156 @@ function System.reduceActionLifecycle(self: any, actionName: string, states: any
 	}
 end
 
+function System._actorFailure(
+	self: any,
+	ownerKind: string,
+	ownerName: string,
+	failure: string,
+	message: string,
+	reason: any?,
+	context: any?,
+	diagnostics: any?
+): any
+	local diagnosticName = "ActionActorRejected"
+	if ownerKind == "remote" then
+		diagnosticName = "Remote" .. failure
+	elseif failure == "ActorPolicyUnknown" then
+		diagnosticName = "ActionActorPolicyUnknown"
+	end
+
+	local failureContext = copyMap(context or {})
+	failureContext[ownerKind] = ownerName
+
+	recordViolation(diagnostics, {
+		level = "error",
+		category = ownerKind,
+		system = self._name,
+		name = diagnosticName,
+		message = message,
+		context = failureContext,
+	})
+
+	return {
+		ok = false,
+		name = diagnosticName,
+		reason = reason or message,
+		message = message,
+	}
+end
+
+function System._checkActorPolicy(
+	self: any,
+	ownerKind: string,
+	ownerName: string,
+	actorPolicy: any,
+	actor: any,
+	context: any?,
+	diagnostics: any?
+): any
+	if actorPolicy == nil then
+		return {
+			ok = true,
+		}
+	end
+
+	local subject = self._name .. "." .. ownerName
+	if actorPolicy == true or actorPolicy == "required" then
+		if actor ~= nil then
+			return {
+				ok = true,
+			}
+		end
+		return self:_actorFailure(
+			ownerKind,
+			ownerName,
+			"ActorRequired",
+			subject .. " requires an actor",
+			nil,
+			context,
+			diagnostics
+		)
+	end
+
+	local check = actorPolicy
+	local policyName = nil
+	if type(actorPolicy) == "string" then
+		policyName = actorPolicy
+		check = self._actorPolicies[actorPolicy]
+	elseif type(actorPolicy) == "table" then
+		policyName = actorPolicy.name or actorPolicy.policy
+		check = actorPolicy.check or actorPolicy.authorize
+		if actorPolicy.required == true and actor == nil then
+			return self:_actorFailure(
+				ownerKind,
+				ownerName,
+				"ActorRequired",
+				subject .. " requires an actor",
+				nil,
+				context,
+				diagnostics
+			)
+		end
+	end
+
+	if type(check) ~= "function" then
+		local missingName = policyName or tostring(actorPolicy)
+		return self:_actorFailure(
+			ownerKind,
+			ownerName,
+			"ActorPolicyUnknown",
+			subject .. " references unknown actor policy " .. tostring(missingName),
+			missingName,
+			context,
+			diagnostics
+		)
+	end
+
+	local ok, acceptedOrReason = pcall(check, actor, context or {})
+	if ok and acceptedOrReason == true then
+		return {
+			ok = true,
+		}
+	end
+
+	local reason = ok and acceptedOrReason or acceptedOrReason
+	local message = subject .. " rejected actor"
+	if reason ~= nil and reason ~= false then
+		message ..= " (" .. tostring(reason) .. ")"
+	end
+
+	return self:_actorFailure(ownerKind, ownerName, "ActorRejected", message, reason, context, diagnostics)
+end
+
+function System.checkRemoteActor(self: any, remoteName: string, actor: any, context: any?, diagnostics: any?): any
+	assertName("Remote name", remoteName)
+	local remote = self._remotes[remoteName]
+	if not remote then
+		local message = "unknown remote contract: " .. tostring(remoteName)
+		recordViolation(diagnostics, {
+			level = "error",
+			category = "remote",
+			system = self._name,
+			name = "UnknownRemote",
+			message = message,
+			context = context or {
+				remote = remoteName,
+			},
+		})
+		return {
+			ok = false,
+			name = "UnknownRemote",
+			reason = message,
+		}
+	end
+
+	local actorContext = copyMap(context or {})
+	actorContext.actor = actorContext.actor or actor
+	actorContext.player = actorContext.player or actor
+	actorContext.remote = actorContext.remote or remoteName
+
+	return self:_checkActorPolicy("remote", remoteName, remote.actor, actor, actorContext, diagnostics)
+end
+
 function System.checkActionPolicy(self: any, actionName: string, context: any?, diagnostics: any?): any
 	local action = self._actions[actionName]
 	if not action then
@@ -1311,64 +1510,14 @@ function System.checkActionPolicy(self: any, actionName: string, context: any?, 
 
 	local policy = action.policy or {}
 	local actorPolicy = policy.actor or policy.authorize
-	local actorRequired = policy.actorRequired == true or actorPolicy == "required"
-	if actorRequired and (context == nil or context.actor == nil) then
-		local name = "ActionActorRejected"
-		local message = self._name .. "." .. actionName .. " requires an actor"
-		recordViolation(diagnostics, {
-			level = "error",
-			category = "action",
-			system = self._name,
-			name = name,
-			message = message,
-			context = context or {
-				action = actionName,
-			},
-		})
-		return {
-			ok = false,
-			name = name,
-			reason = message,
-		}
+	if actorPolicy == nil and policy.actorRequired == true then
+		actorPolicy = "required"
+	elseif policy.actorRequired == true and (context == nil or context.actor == nil) then
+		return self:_checkActorPolicy("action", actionName, "required", nil, context, diagnostics)
 	end
 
-	if type(actorPolicy) ~= "function" then
-		return {
-			ok = true,
-		}
-	end
-
-	local ok, acceptedOrReason = pcall(actorPolicy, context and context.actor, context or {})
-	if ok and acceptedOrReason == true then
-		return {
-			ok = true,
-		}
-	end
-
-	local reason = ok and acceptedOrReason or acceptedOrReason
-	local name = "ActionActorRejected"
-	local message = self._name .. "." .. actionName .. " rejected actor"
-	if reason ~= nil and reason ~= false then
-		message ..= " (" .. tostring(reason) .. ")"
-	end
-
-	recordViolation(diagnostics, {
-		level = "error",
-		category = "action",
-		system = self._name,
-		name = name,
-		message = message,
-		context = context or {
-			action = actionName,
-		},
-	})
-
-	return {
-		ok = false,
-		name = name,
-		reason = reason,
-		message = message,
-	}
+	local actor = context and context.actor or nil
+	return self:_checkActorPolicy("action", actionName, actorPolicy, actor, context, diagnostics)
 end
 
 function System.runAction(self: any, actionName: string, options: any?, handler: any?): any
@@ -1565,43 +1714,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 end
 
 function System.describe(self: any): Description
-	local actions = {}
-	for name, action in pairs(self._actions) do
-		actions[name] = describeAction(action, self._preconditions, self._postconditions)
-	end
-
-	local remotes = {}
-	for name, remote in pairs(self._remotes) do
-		remotes[name] = {
-			schema = remote.schema,
-			options = copyMap(remote.options),
-		}
-	end
-
-	local preconditions = {}
-	for _, precondition in ipairs(self._preconditions) do
-		table.insert(preconditions, precondition.name)
-	end
-
-	local postconditions = {}
-	for _, postcondition in ipairs(self._postconditions) do
-		table.insert(postconditions, postcondition.name)
-	end
-
-	return {
-		name = self._name,
-		ownedTags = copyList(self._ownedTags),
-		ownedFolders = copyList(self._ownedFolders),
-		mayRead = copyList(self._mayRead),
-		mayWrite = copyList(self._mayWrite),
-		mustNeverTouch = copyList(self._mustNeverTouch),
-		strictPermissions = self._strictPermissions,
-		actions = actions,
-		remotes = remotes,
-		preconditions = preconditions,
-		postconditions = postconditions,
-		lifecycles = copyMap(self._lifecycles),
-	}
+	return ContractReport.describeSystem(self)
 end
 
 return System

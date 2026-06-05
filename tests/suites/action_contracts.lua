@@ -300,7 +300,7 @@ return function(test)
 		})
 
 	local permissionDescription = permissionContract:describe()
-	check("system describes strict permissions", permissionDescription.strictPermissions == true)
+	check("system describes strict permissions", permissionDescription.permissions.strict == true)
 
 	local readAllowed = permissionContract:checkRead("Player.Profile.Level")
 	local readDenied = permissionContract:checkRead("Player.Inventory")
@@ -380,7 +380,7 @@ return function(test)
 	local strictDenied = Contracts.system("StrictService")
 		:strictPermissions()
 		:checkRead("Anywhere.Path")
-	check("non-strict empty permissions preserve compatibility", permissiveRead.ok == true)
+	check("non-strict empty permissions allow access by default", permissiveRead.ok == true)
 	check("strict empty permissions deny by default", strictDenied.ok == false and strictDenied.name == "ReadNotAllowed")
 
 	test:section("ActionBoundRemotes")

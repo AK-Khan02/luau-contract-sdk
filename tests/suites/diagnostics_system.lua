@@ -79,7 +79,7 @@ return function(test)
 		end)
 
 	local description = weaponContract:describe()
-	check("system records owned tag", description.ownedTags[1] == "GeneratedWeaponTool")
+	check("system records owned tag", description.ownership.tags[1] == "GeneratedWeaponTool")
 	check("system records postcondition names", description.postconditions[1] == "PlayerHasWeapon")
 	check(
 		"system validates remote payload",

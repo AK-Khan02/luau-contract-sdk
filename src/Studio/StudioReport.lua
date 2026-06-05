@@ -120,6 +120,16 @@ local function countScriptsByClass(scripts)
 	return counts
 end
 
+local function contractReports(contracts)
+	local reports = {}
+	for _, contract in ipairs(contracts or {}) do
+		if contract and type(contract.describe) == "function" then
+			table.insert(reports, contract:describe())
+		end
+	end
+	return reports
+end
+
 function StudioReport.fromScripts(scripts, options)
 	options = options or {}
 
@@ -134,24 +144,33 @@ function StudioReport.fromScripts(scripts, options)
 	local diagnosticsReport = options.diagnosticsReport
 	local diagnosticRows = diagnosticRowsFromReport(diagnosticsReport)
 	local scanner = scannerSummary(scannerFindings)
+	local contracts = contractReports(options.contracts or options.systems)
 
 	return {
 		summary = {
 			scriptCount = #(scripts or {}),
 			scriptsByClass = countScriptsByClass(scripts or {}),
 			systemCount = #systems,
+			contractCount = #contracts,
 			diagnosticCount = diagnosticsReport and diagnosticsReport.total or 0,
 			scannerFindingCount = scanner.total,
 			scannerErrors = scanner.bySeverity.error or 0,
 			scannerWarnings = scanner.bySeverity.warn or 0,
 		},
 		systems = systems,
+		contracts = contracts,
 		diagnostics = diagnosticRows,
 		scanner = {
 			findings = scannerFindings,
 			summary = scanner,
 		},
 	}
+end
+
+function StudioReport.fromContracts(contracts, options)
+	local reportOptions = copyMap(options or {})
+	reportOptions.contracts = contracts
+	return StudioReport.fromScripts({}, reportOptions)
 end
 
 function StudioReport.formatSystem(system)

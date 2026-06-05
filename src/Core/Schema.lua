@@ -71,6 +71,28 @@ local function vectorMagnitude(value: any): number
 	return math.sqrt(value.X * value.X + value.Y * value.Y + value.Z * value.Z)
 end
 
+local function copyList(values: {any}): {any}
+	local copy = {}
+	for index, value in ipairs(values) do
+		copy[index] = value
+	end
+	return copy
+end
+
+local function copySerializable(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+
+	local copy = {}
+	for key, child in pairs(value) do
+		if type(child) ~= "function" then
+			copy[key] = copySerializable(child)
+		end
+	end
+	return copy
+end
+
 function Schema.any(): Schema
 	return {
 		kind = "any",
@@ -351,6 +373,91 @@ function Schema.validate(schema: any, value: any, path: string?): ValidationResu
 	end
 
 	return validator(schema, value, path or "value")
+end
+
+function Schema.describe(schema: any): any
+	if type(schema) == "function" then
+		return {
+			kind = "custom",
+			name = "function",
+		}
+	end
+	if type(schema) ~= "table" or not schema.kind then
+		error("Schema.describe expects a schema", 2)
+	end
+
+	if schema.kind == "any" or schema.kind == "boolean" then
+		return {
+			kind = schema.kind,
+		}
+	end
+	if schema.kind == "number" or schema.kind == "integer" then
+		return {
+			kind = schema.kind,
+			min = schema.min,
+			max = schema.max,
+		}
+	end
+	if schema.kind == "string" then
+		return {
+			kind = "string",
+			minLength = schema.minLength,
+			maxLength = schema.maxLength,
+			pattern = schema.pattern,
+			description = schema.description,
+		}
+	end
+	if schema.kind == "oneOf" then
+		return {
+			kind = "oneOf",
+			values = copyList(schema.values or {}),
+		}
+	end
+	if schema.kind == "literal" then
+		return {
+			kind = "literal",
+			expected = copySerializable(schema.expected),
+		}
+	end
+	if schema.kind == "optional" then
+		return {
+			kind = "optional",
+			schema = Schema.describe(schema.schema),
+		}
+	end
+	if schema.kind == "array" then
+		return {
+			kind = "array",
+			schema = Schema.describe(schema.schema),
+		}
+	end
+	if schema.kind == "object" then
+		local shape = {}
+		for key, childSchema in pairs(schema.shape or {}) do
+			shape[key] = Schema.describe(childSchema)
+		end
+		return {
+			kind = "object",
+			shape = shape,
+			allowExtra = schema.allowExtra == true,
+		}
+	end
+	if schema.kind == "vector3" then
+		return {
+			kind = "vector3",
+			unitish = schema.unitish == true,
+			minMagnitude = schema.minMagnitude,
+			maxMagnitude = schema.maxMagnitude,
+		}
+	end
+	if schema.kind == "custom" then
+		return {
+			kind = "custom",
+			name = schema.name,
+		}
+	end
+
+	error("Unknown schema kind: " .. tostring(schema.kind), 2)
 end
 
 return Schema

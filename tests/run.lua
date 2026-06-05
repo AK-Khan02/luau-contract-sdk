@@ -7,6 +7,7 @@ local suites = {
 	require("./suites/diagnostics_system"),
 	require("./suites/action_contracts"),
 	require("./suites/lifecycle_sessions"),
+	require("./suites/remote_policies_reports"),
 	require("./suites/adapters_examples"),
 	require("./suites/scanner_studio"),
 }

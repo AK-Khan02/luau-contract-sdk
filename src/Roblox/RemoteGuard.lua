@@ -1,4 +1,5 @@
 local RateLimiter = require("../Core/RateLimiter")
+local Schema = require("../Core/Schema")
 
 local RemoteGuard = {}
 
@@ -9,71 +10,352 @@ local function record(diagnostics, fields)
 	return fields
 end
 
-local function assertRemoteEvent(remoteEvent)
-	if not remoteEvent or not remoteEvent.OnServerEvent or not remoteEvent.OnServerEvent.Connect then
+local function copyMap(value)
+	local copy = {}
+	for key, child in pairs(value or {}) do
+		copy[key] = child
+	end
+	return copy
+end
+
+local function hasServerEvent(remote)
+	return remote and remote.OnServerEvent and remote.OnServerEvent.Connect
+end
+
+local function assertServerEvent(remote)
+	if not hasServerEvent(remote) then
 		error("RemoteGuard.connect expects a RemoteEvent-like value", 3)
 	end
 end
 
-local function actionContext(options, player, remoteName)
-	local context = {}
-	for key, value in pairs(options.context or {}) do
-		context[key] = value
+local function directionAllowsServer(direction)
+	return direction == nil or direction == "server" or direction == "bidirectional"
+end
+
+local function assertServerDirection(remoteName, direction)
+	if not directionAllowsServer(direction) then
+		error("RemoteGuard.connect cannot attach a server handler to client remote " .. tostring(remoteName), 3)
 	end
+end
+
+local function shouldUseRemoteFunction(remote, options, remoteOptions)
+	local kind = options.kind or options.remoteKind
+	if kind == "function" then
+		return true
+	end
+	if kind == "event" then
+		return false
+	end
+	if remoteOptions.response ~= nil or options.response ~= nil then
+		return true
+	end
+	return remote and remote.OnServerInvoke ~= nil
+end
+
+local function connectServerFunction(remote, handler)
+	local previous = remote.OnServerInvoke
+	remote.OnServerInvoke = handler
+
+	return {
+		Disconnect = function()
+			if remote.OnServerInvoke == handler then
+				remote.OnServerInvoke = previous
+			end
+		end,
+	}
+end
+
+local function actionContext(options, player, payload, remoteName)
+	local context = copyMap(options.context)
 	context.player = player
+	context.actor = context.actor or player
+	context.remote = remoteName
+	context.payload = payload
+	context.input = payload
+	return context
+end
+
+local function remoteContext(options, player, payload, remoteName)
+	local context = actionContext(options, player, payload, remoteName)
 	context.remote = remoteName
 	return context
 end
 
-local function lifecycleSession(options, player, payload, remoteName, diagnostics, systemContract)
-	if type(options.sessionFor) == "function" then
-		local ok, sessionOrReason = pcall(options.sessionFor, player, payload, remoteName)
-		if ok then
-			return sessionOrReason
-		end
+local function recordLifecycleError(diagnostics, systemContract, name, message, player, remoteName)
+	record(diagnostics, {
+		level = "error",
+		category = "lifecycle",
+		system = systemContract:name(),
+		name = name,
+		message = message,
+		context = {
+			player = player,
+			remote = remoteName,
+		},
+	})
+end
 
-		record(diagnostics, {
-			level = "error",
-			category = "lifecycle",
-			system = systemContract:name(),
-			name = "LifecycleSessionError",
-			message = tostring(sessionOrReason),
-			context = {
-				player = player,
-				remote = remoteName,
-			},
-		})
+local function callResolver(resolver, player, payload, remoteName, diagnostics, systemContract, diagnosticName)
+	local ok, value = pcall(resolver, player, payload, remoteName)
+	if ok then
+		return value, true
+	end
+
+	recordLifecycleError(diagnostics, systemContract, diagnosticName, tostring(value), player, remoteName)
+	return nil, false
+end
+
+local function sessionFromRegistry(options, sessionName, player, payload, remoteName, diagnostics, systemContract)
+	local sessions = options.sessions or options.lifecycleSessions
+	local resolver = sessions and sessions[sessionName]
+	if resolver == nil then
+		recordLifecycleError(
+			diagnostics,
+			systemContract,
+			"LifecycleSessionMissing",
+			"missing lifecycle session resolver: " .. tostring(sessionName),
+			player,
+			remoteName
+		)
+		return nil, false
+	end
+	if type(resolver) == "function" then
+		return callResolver(resolver, player, payload, remoteName, diagnostics, systemContract, "LifecycleSessionError")
+	end
+	return resolver, true
+end
+
+local function lifecycleSession(options, remoteOptions, player, payload, remoteName, diagnostics, systemContract)
+	if type(options.sessionFor) == "function" then
+		return callResolver(options.sessionFor, player, payload, remoteName, diagnostics, systemContract, "LifecycleSessionError")
+	end
+	if options.session ~= nil then
+		return options.session, true
+	end
+
+	local lifecycle = remoteOptions.lifecycle or {}
+	if lifecycle.session ~= nil then
+		return sessionFromRegistry(options, lifecycle.session, player, payload, remoteName, diagnostics, systemContract)
+	end
+
+	return nil, true
+end
+
+local function fieldPathValue(source, path)
+	if type(path) ~= "string" or path == "" then
 		return nil
 	end
 
-	return options.session
+	local value = source
+	for key in string.gmatch(path, "[^%.]+") do
+		if type(value) ~= "table" then
+			return nil
+		end
+		value = value[key]
+	end
+	return value
 end
 
-local function expectedRevision(options, player, payload, remoteName, diagnostics, systemContract)
+local function expectedRevision(options, remoteOptions, player, payload, remoteName, diagnostics, systemContract)
 	local revision = options.expectedRevision or options.revision
-	if type(revision) == "function" then
-		local ok, value = pcall(revision, player, payload, remoteName)
-		if ok then
-			return value, true
-		end
+	local policyRevision = remoteOptions.lifecycle and remoteOptions.lifecycle.revision
+	if revision == nil then
+		revision = policyRevision
+	end
 
-		record(diagnostics, {
-			level = "error",
-			category = "lifecycle",
-			system = systemContract:name(),
-			name = "LifecycleRevisionError",
-			message = tostring(value),
-			context = {
-				player = player,
-				remote = remoteName,
-			},
-		})
-		return nil, false
+	if type(revision) == "function" then
+		return callResolver(revision, player, payload, remoteName, diagnostics, systemContract, "LifecycleRevisionError")
+	end
+	if type(revision) == "string" then
+		local value = fieldPathValue(payload, revision)
+		if value == nil and policyRevision ~= nil then
+			recordLifecycleError(
+				diagnostics,
+				systemContract,
+				"LifecycleRevisionMissing",
+				"missing lifecycle revision field: " .. revision,
+				player,
+				remoteName
+			)
+			return nil, false
+		end
+		return value, true
 	end
 	return revision, true
 end
 
-function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, options)
+local function rateLimitKey(rateLimit, player, payload, remoteName)
+	local key = rateLimit and rateLimit.key
+	if type(key) == "function" then
+		local ok, value = pcall(key, player, payload, remoteName)
+		if ok and value ~= nil then
+			return value
+		end
+		return player
+	end
+	if key == "global" then
+		return "__global"
+	end
+	if key == "remote" then
+		return remoteName
+	end
+	if type(key) == "string" and string.sub(key, 1, 8) == "payload." then
+		return fieldPathValue(payload, string.sub(key, 9)) or player
+	end
+	return player
+end
+
+local function checkRateLimit(limiter, rateLimit, player, payload, remoteName, diagnostics, systemContract)
+	if limiter == nil then
+		return true
+	end
+
+	local key = rateLimitKey(rateLimit, player, payload, remoteName)
+	if limiter:check(key, remoteName, rateLimit) then
+		return true
+	end
+
+	record(diagnostics, {
+		level = "error",
+		category = "remote",
+		system = systemContract:name(),
+		name = "RemoteRateLimited",
+		message = "remote rate limit exceeded: " .. tostring(remoteName),
+		context = {
+			player = player,
+			remote = remoteName,
+			key = key,
+		},
+	})
+	return false
+end
+
+local function validateActionPayload(systemContract, actionName, remoteName, payload, diagnostics, context)
+	local actionOptions = systemContract.actionOptions and systemContract:actionOptions(actionName) or nil
+	if actionOptions ~= nil and actionOptions.input ~= nil then
+		return systemContract:validateActionInput(actionName, payload, diagnostics, context)
+	end
+	return systemContract:validateRemote(remoteName, payload, diagnostics, context)
+end
+
+local function validateResponse(systemContract, remoteName, responseSchema, value, diagnostics, context)
+	if responseSchema == nil and not systemContract.validateRemoteResponse then
+		return value
+	end
+
+	context.result = value
+	local response = nil
+	if responseSchema ~= nil then
+		response = Schema.validate(responseSchema, value, "response")
+		if not response.ok then
+			record(diagnostics, {
+				level = "error",
+				category = "remote",
+				system = systemContract:name(),
+				name = "RemoteResponseInvalid",
+				message = response.reason,
+				context = context,
+			})
+		end
+	else
+		response = systemContract:validateRemoteResponse(remoteName, value, diagnostics, context)
+	end
+	if not response.ok then
+		return nil
+	end
+	return response.value
+end
+
+local function checkRemoteActor(systemContract, remoteName, player, context, diagnostics)
+	if not systemContract.checkRemoteActor then
+		return true
+	end
+	local result = systemContract:checkRemoteActor(remoteName, player, context, diagnostics)
+	return result.ok == true
+end
+
+local function runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
+	local context = remoteContext(options, player, payload, remoteName)
+	local validation = validateActionPayload(systemContract, remoteOptions.action, remoteName, payload, diagnostics, context)
+	if not validation.ok then
+		return nil
+	end
+
+	payload = validation.value
+	context.payload = payload
+	context.input = payload
+
+	if not checkRemoteActor(systemContract, remoteName, player, context, diagnostics) then
+		return nil
+	end
+
+	local session, sessionOk = lifecycleSession(options, remoteOptions, player, payload, remoteName, diagnostics, systemContract)
+	if not sessionOk then
+		return nil
+	end
+
+	local revision, revisionOk = expectedRevision(options, remoteOptions, player, payload, remoteName, diagnostics, systemContract)
+	if not revisionOk then
+		return nil
+	end
+
+	local actionResult = systemContract:runAction(remoteOptions.action, {
+		actor = player,
+		payload = payload,
+		diagnostics = diagnostics,
+		states = options.states,
+		session = session,
+		expectedRevision = revision,
+		context = actionContext(options, player, payload, remoteName),
+	}, function(scope)
+		return handler(player, scope:payload(), scope)
+	end)
+
+	if not actionResult.ok then
+		return nil
+	end
+
+	return validateResponse(systemContract, remoteName, remoteOptions.response, actionResult.value, diagnostics, context)
+end
+
+local function runLegacyRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
+	local context = remoteContext(options, player, payload, remoteName)
+	local validation = systemContract:validateRemote(remoteName, payload, diagnostics, context)
+	if not validation.ok then
+		return nil
+	end
+
+	payload = validation.value
+	context.payload = payload
+	context.input = payload
+
+	if not checkRemoteActor(systemContract, remoteName, player, context, diagnostics) then
+		return nil
+	end
+
+	local ok, result = pcall(handler, player, payload, {
+		player = player,
+		payload = payload,
+		remote = remoteName,
+		diagnostics = diagnostics,
+		system = systemContract,
+	})
+	if not ok then
+		record(diagnostics, {
+			level = "error",
+			category = "remote",
+			system = systemContract:name(),
+			name = "RemoteHandlerError",
+			message = tostring(result),
+			context = context,
+		})
+		return nil
+	end
+
+	return validateResponse(systemContract, remoteName, remoteOptions.response, result, diagnostics, context)
+end
+
+function RemoteGuard.connect(systemContract, remoteName, remote, handler, options)
 	options = options or {}
 
 	if not systemContract or not systemContract.validateRemote then
@@ -82,98 +364,36 @@ function RemoteGuard.connect(systemContract, remoteName, remoteEvent, handler, o
 	if type(handler) ~= "function" then
 		error("RemoteGuard.connect expects a handler function", 2)
 	end
-	assertRemoteEvent(remoteEvent)
 
 	local diagnostics = options.diagnostics
 	local remoteOptions = systemContract:remoteOptions(remoteName) or {}
-	local actionName = options.action or remoteOptions.action
-	local rateLimit = options.rateLimit or remoteOptions.rateLimit
-	local limiter = rateLimit and RateLimiter.new(rateLimit, options.clock) or nil
+	remoteOptions.action = options.action or remoteOptions.action
+	remoteOptions.direction = options.direction or remoteOptions.direction or "server"
+	remoteOptions.response = options.response or remoteOptions.response
+	remoteOptions.rateLimit = options.rateLimit or remoteOptions.rateLimit
+	remoteOptions.lifecycle = options.lifecycle or remoteOptions.lifecycle or {}
 
-	return remoteEvent.OnServerEvent:Connect(function(player, payload) -- contracts-scan: ignore raw-remote-handler
-		if limiter and not limiter:check(player, remoteName, rateLimit) then
-			record(diagnostics, {
-				level = "error",
-				category = "remote",
-				system = systemContract:name(),
-				name = "RemoteRateLimited",
-				message = "remote rate limit exceeded: " .. tostring(remoteName),
-				context = {
-					player = player,
-					remote = remoteName,
-				},
-			})
+	assertServerDirection(remoteName, remoteOptions.direction)
+
+	local limiter = remoteOptions.rateLimit and RateLimiter.new(remoteOptions.rateLimit, options.clock) or nil
+	local function handleServerCall(player, payload)
+		if not checkRateLimit(limiter, remoteOptions.rateLimit, player, payload, remoteName, diagnostics, systemContract) then
 			return nil
 		end
 
-		if actionName and systemContract.runAction then
-			local actionOptions = systemContract.actionOptions and systemContract:actionOptions(actionName) or nil
-			if actionOptions ~= nil and actionOptions.input == nil then
-				local remoteValidation = systemContract:validateRemote(remoteName, payload, diagnostics, {
-					player = player,
-					remote = remoteName,
-				})
-				if not remoteValidation.ok then
-					return nil
-				end
-				payload = remoteValidation.value
-			end
-
-			local revision, revisionOk = expectedRevision(options, player, payload, remoteName, diagnostics, systemContract)
-			if revisionOk == false then
-				return nil
-			end
-
-			local actionResult = systemContract:runAction(actionName, {
-				actor = player,
-				payload = payload,
-				diagnostics = diagnostics,
-				states = options.states,
-				session = lifecycleSession(options, player, payload, remoteName, diagnostics, systemContract),
-				expectedRevision = revision,
-				context = actionContext(options, player, remoteName),
-			}, function(scope)
-				return handler(player, scope:payload(), scope)
-			end)
-
-			if not actionResult.ok then
-				return nil
-			end
-
-			return actionResult.value
+		if remoteOptions.action and systemContract.runAction then
+			return runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
 		end
+		return runLegacyRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
+	end
 
-		local validation = systemContract:validateRemote(remoteName, payload, diagnostics, {
-			player = player,
-			remote = remoteName,
-		})
-		if not validation.ok then
-			return nil
-		end
+	if shouldUseRemoteFunction(remote, options, remoteOptions) then
+		return connectServerFunction(remote, handleServerCall)
+	end
 
-		local ok, result = pcall(handler, player, validation.value, {
-			player = player,
-			payload = validation.value,
-			remote = remoteEvent,
-			diagnostics = diagnostics,
-			system = systemContract,
-		})
-		if not ok then
-			record(diagnostics, {
-				level = "error",
-				category = "remote",
-				system = systemContract:name(),
-				name = "RemoteHandlerError",
-				message = tostring(result),
-				context = {
-					player = player,
-					remote = remoteName,
-				},
-			})
-			return nil
-		end
-
-		return result
+	assertServerEvent(remote)
+	return remote.OnServerEvent:Connect(function(player, payload) -- contracts-scan: ignore raw-remote-handler
+		return handleServerCall(player, payload)
 	end)
 end
 

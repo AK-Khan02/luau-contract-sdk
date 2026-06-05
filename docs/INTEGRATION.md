@@ -27,7 +27,7 @@ package into an existing Rojo game.
 `wally.toml` describes the package as:
 
 ```text
-luau-contract-sdk/core@0.8.0
+luau-contract-sdk/core@0.9.0
 ```
 
 Publishing is intentionally not required for local use. The manifest is marked
@@ -39,12 +39,12 @@ with the target Wally scope before publishing.
 The core modules are pure Luau and can be tested outside Studio. Roblox adapters
 expect Roblox-like values:
 
-- `RemoteGuard` expects a `RemoteEvent` with `OnServerEvent:Connect`.
-  Action-bound remotes run through `System:runAction`.
+- `RemoteGuard` expects a server-directed `RemoteEvent` with
+  `OnServerEvent:Connect` or a RemoteFunction-like value when a response schema
+  is declared. Action-bound remotes run through `System:runAction`.
 - `Ownership` expects an Instance-like value with `SetAttribute`, `GetAttribute`,
   and optionally `Destroy`.
-- `PostconditionRunner` is a small compatibility adapter for code that only
-  needs post-action checks.
+- `PostconditionRunner` wraps code that only needs post-action checks.
 - `OverlayState` exposes rows and formatted text for a Roblox debug overlay
   without creating UI itself.
 
@@ -92,6 +92,38 @@ RemoteGuard.connect(Contract, "DeployRemote", remote, handler, {
 	revision = function(player, payload)
 		return payload.Revision
 	end,
+})
+```
+
+Remote declarations can name the session resolver directly:
+
+```lua
+Contract
+	:actorPolicy("admin", function(player)
+		return Admins[player.UserId] == true
+	end)
+	:remote("GrantItem", GrantItemSchema, {
+		action = "GrantItem",
+		direction = "server",
+		actor = "admin",
+		response = GrantItemResultSchema,
+		lifecycle = {
+			session = "inventory",
+			revision = "Revision",
+		},
+		rateLimit = {
+			maxRequests = 4,
+			windowSeconds = 1,
+			key = "payload.ItemId",
+		},
+	})
+
+RemoteGuard.connect(Contract, "GrantItem", remoteFunction, handler, {
+	sessions = {
+		inventory = function(player)
+			return inventorySessions[player.UserId]
+		end,
+	},
 })
 ```
 

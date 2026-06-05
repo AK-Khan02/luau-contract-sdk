@@ -1,42 +1,333 @@
 # Luau Contract SDK
 
-A Luau contract SDK for rblx game systems.
+A small but powerful Luau SDK for making rblx game systems safer, easier to
+reason about, and easier to inspect.
 
-The SDK is intentionally generic. The core package does not know about weapons,
-maps, pets, obbies, tycoons, or any other genre.
+The SDK helps you define contracts around the parts of game code that usually
+become fragile over time:
 
-## What It Includes
+- remote payloads and responses
+- server actions that mutate game state
+- read/write/effect permissions
+- actor and admin policies
+- lifecycle state transitions
+- postconditions and diagnostics
+- contract reports for Studio tooling and docs
 
-- System contract definitions: `ownsTag`, `ownsFolder`, `mayRead`, `mayWrite`,
-  `mustNeverTouch`, `strictPermissions`, `precondition`, `postcondition`,
-  `lifecycle`, and `action`.
-- Action contracts with input/output schemas, scoped effects, preconditions,
-  postconditions, actor policies, lifecycle guards, and action-bound remotes.
-- Enforced permission capabilities for system-level and action-level reads,
-  writes, creates, destroys, and touches.
-- Pure payload schemas for remote validation.
-- Lifecycle reducers and sessions for explicit state transitions, stale revision
-  checks, and session-backed action guards.
-- Stable invariant and postcondition failure names.
-- Diagnostics ring buffer for recent contract violations.
-- Searchable diagnostic records with IDs, categories, codes, systems, names, and
-  context.
-- Diagnostic reports with counts by level, system, category, and invariant name.
-- Subscriber hooks and overlay feed rows for debug overlays and future Studio
-  tooling.
-- Static scanner for risky Roblox source patterns: raw remote handlers, raw
-  remote firing, broad cleanup, workspace clearing, unowned destroys, and async
-  callbacks without stale-token checks.
-- Studio report model for contract systems, diagnostics, and scanner findings.
-- Roblox Studio plugin source with a dock widget for systems and static findings.
-- A small rate limiter used by guarded remotes.
-- Minimal Roblox adapters for action-bound remote guarding, ownership
-  attributes, and postcondition-running around legacy server actions.
-- Roblox overlay state adapter for feeding debug UI.
-- Generic checkpoint, inventory, and spawn/loadout example contracts.
-- Root package entry at `src/init.lua`.
-- Package metadata in `src/Package.lua`, `wally.toml`, and `default.project.json`.
-- API and integration docs under `docs/`.
+The core package is pure Luau. Roblox-specific behavior lives in thin adapters
+under `src/Roblox`.
+
+## Why Use It
+
+Large game systems often start with simple handlers and direct mutation. That
+works until the same system has several remotes, admin paths, retries, stale
+events, and partially failed updates.
+
+Luau Contract SDK gives those flows one explicit contract:
+
+- What input is valid?
+- Who may call this?
+- What may this action read or write?
+- What state must the system be in?
+- What state transition should happen after success?
+- What response shape should go back to the caller?
+- What diagnostic should be recorded when the contract is violated?
+
+The goal is not to replace your game logic. The goal is to wrap important game
+logic in a guard that is declarative, testable, and inspectable.
+
+## Before / With SDK
+
+### Remote Payload Validation
+
+Before SDK:
+
+```lua
+GrantItem.OnServerEvent:Connect(function(player, payload)
+	if type(payload) ~= "table" then
+		return
+	end
+	if type(payload.ItemId) ~= "string" or payload.ItemId == "" then
+		return
+	end
+	if string.find(payload.ItemId, "../", 1, true) then
+		return
+	end
+
+	InventoryService.grant(player, payload.ItemId)
+end)
+```
+
+With SDK:
+
+```lua
+local GrantItemSchema = Contracts.object({
+	ItemId = Contracts.stringId(),
+}, {
+	allowExtra = false,
+})
+
+local InventoryContract = Contracts.system("InventoryService")
+	:remote("GrantItem", GrantItemSchema)
+
+RemoteGuard.connect(InventoryContract, "GrantItem", GrantItem, function(player, payload)
+	InventoryService.grant(player, payload.ItemId)
+end, {
+	diagnostics = diagnostics,
+})
+```
+
+Invalid payloads are rejected consistently and recorded as diagnostics instead
+of being handled differently in every remote.
+
+### Guarded State Mutation
+
+Before SDK:
+
+```lua
+GrantItem.OnServerEvent:Connect(function(player, payload)
+	local item = Catalog[payload.ItemId]
+	if not item then
+		return
+	end
+
+	player.Inventory[payload.ItemId] = true
+	print("granted item")
+end)
+```
+
+With SDK:
+
+```lua
+local GrantItemResult = Contracts.object({
+	granted = Contracts.boolean(),
+	itemId = Contracts.stringId(),
+}, {
+	allowExtra = false,
+})
+
+local InventoryContract = Contracts.system("InventoryService")
+	:strictPermissions()
+	:mayRead("Catalog.Items")
+	:mayWrite("Player.Inventory")
+	:postcondition("InventoryContainsGrantedItem", function(context)
+		return context.inventory[context.result.itemId] == true
+	end)
+	:action("GrantItem", {
+		input = GrantItemSchema,
+		output = GrantItemResult,
+		reads = { "Catalog.Items" },
+		writes = { "Player.Inventory" },
+		postconditions = { "InventoryContainsGrantedItem" },
+	})
+
+local result = InventoryContract:runAction("GrantItem", {
+	actor = player,
+	payload = payload,
+	context = {
+		inventory = player.Inventory,
+	},
+	diagnostics = diagnostics,
+}, function(scope)
+	local itemId = scope:read("Catalog.Items", function(context)
+		return context.payload.ItemId
+	end)
+
+	return scope:write("Player.Inventory", function(context)
+		context.inventory[itemId] = true
+		return {
+			granted = true,
+			itemId = itemId,
+		}
+	end)
+end)
+```
+
+The action now validates input, validates output, tracks effects, enforces the
+declared write boundary, and checks the postcondition.
+
+### Permission Boundaries
+
+Before SDK:
+
+```lua
+local function saveReward(player, reward)
+	player.Profile.Currency += reward.Coins
+	player.Inventory.Items[reward.ItemId] = true
+end
+```
+
+With SDK:
+
+```lua
+local InventoryContract = Contracts.system("InventoryService")
+	:strictPermissions()
+	:mayWrite("Player.Inventory")
+	:mustNeverTouch("Player.Profile")
+	:action("GrantItem", {
+		writes = { "Player.Inventory.Items" },
+	})
+
+local ok = InventoryContract:checkActionEffect("GrantItem", {
+	kind = "write",
+	target = "Player.Profile.Currency",
+}, diagnostics)
+```
+
+The SDK makes permission mistakes visible. In strict mode, undeclared reads and
+writes fail instead of silently spreading across systems.
+
+### Lifecycle State Enforcement
+
+Before SDK:
+
+```lua
+StartRound.OnServerEvent:Connect(function(player)
+	if match.State ~= "Lobby" then
+		return
+	end
+
+	match.State = "Running"
+	startRound()
+end)
+```
+
+With SDK:
+
+```lua
+local MatchLifecycle = Contracts.lifecycle("Match")
+	:transition("Lobby", "RoundStarted", "Running")
+	:transition("Running", "RoundEnded", "Results")
+	:transition("Results", "Reset", "Lobby")
+
+local MatchContract = Contracts.system("MatchService")
+	:lifecycle("Match", MatchLifecycle)
+	:action("StartRound", {
+		lifecycle = {
+			requires = {
+				Match = "Lobby",
+			},
+			emits = {
+				Match = "RoundStarted",
+			},
+		},
+	})
+
+local session = MatchContract:lifecycleSession({
+	Match = "Lobby",
+})
+
+MatchContract:runAction("StartRound", {
+	session = session,
+	expectedRevision = session:revision(),
+	diagnostics = diagnostics,
+}, function()
+	return startRound()
+end)
+```
+
+Lifecycle sessions protect against stale, duplicate, and out-of-order events.
+Transitions only commit after the action succeeds.
+
+### Remote Policies
+
+Before SDK:
+
+```lua
+GrantItem.OnServerInvoke = function(player, payload)
+	if not Admins[player.UserId] then
+		return nil
+	end
+	if RateLimit.exceeded(player.UserId, "GrantItem") then
+		return nil
+	end
+
+	local result = grantItem(player, payload.ItemId)
+	if type(result) ~= "table" or type(result.granted) ~= "boolean" then
+		return nil
+	end
+	return result
+end
+```
+
+With SDK, assuming `GrantItem` is declared as an action:
+
+```lua
+local InventoryContract = Contracts.system("InventoryService")
+	:actorPolicy("admin", function(player)
+		return Admins[player.UserId] == true
+	end)
+	:remote("GrantItem", GrantItemSchema, {
+		action = "GrantItem",
+		direction = "server",
+		actor = "admin",
+		response = GrantItemResult,
+		lifecycle = {
+			session = "inventory",
+			revision = "Revision",
+		},
+		rateLimit = {
+			maxRequests = 4,
+			windowSeconds = 1,
+			key = "payload.ItemId",
+		},
+	})
+
+RemoteGuard.connect(InventoryContract, "GrantItem", GrantItemRemote, handler, {
+	sessions = {
+		inventory = function(player)
+			return inventorySessions[player.UserId]
+		end,
+	},
+	diagnostics = diagnostics,
+})
+```
+
+Remote policy metadata binds the remote to its action, actor policy, response
+schema, lifecycle session, revision check, and rate limit.
+
+### Diagnostics And Reports
+
+Before SDK:
+
+```lua
+warn("GrantItem failed")
+```
+
+With SDK:
+
+```lua
+local diagnostics = Contracts.diagnostics({ capacity = 100 })
+local overlay = Contracts.OverlayFeed.new(diagnostics, { maxRows = 8 })
+
+local report = InventoryContract:describe()
+local studioReport = Contracts.Studio.StudioReport.fromContracts({
+	InventoryContract,
+}, {
+	diagnosticsReport = diagnostics:report(),
+})
+
+print(overlay:text())
+```
+
+Diagnostics are structured. Contract reports are serializable. Studio tooling can
+consume the same contract model that runtime guards use.
+
+## Core Concepts
+
+- `Schema`: validates payloads, action inputs, outputs, and remote responses.
+- `System`: names a game system and declares its ownership, permissions,
+  actions, remotes, policies, postconditions, and lifecycles.
+- `Action`: wraps meaningful work in one guarded path.
+- `ActionScope`: records and enforces reads, writes, creates, destroys, and
+  touches during an action.
+- `Lifecycle`: defines allowed states and transitions.
+- `LifecycleSession`: stores current lifecycle state, revision, snapshots, and
+  guarded transition commits.
+- `RemoteGuard`: Roblox adapter that validates guarded remote calls.
+- `Diagnostics`: ring buffer for structured contract violations.
+- `StudioReport`: plain model for scanner findings, diagnostics, and contract
+  reports.
 
 ## Package Shape
 
@@ -49,6 +340,7 @@ src/
   Contracts.lua
   Core/
     ActionScope.lua
+    ContractReport.lua
     DiagnosticReport.lua
     Diagnostics.lua
     Invariant.lua
@@ -56,6 +348,7 @@ src/
     LifecycleSession.lua
     OverlayFeed.lua
     RateLimiter.lua
+    RemotePolicy.lua
     Schema.lua
     StaticScanner.lua
     System.lua
@@ -81,154 +374,6 @@ plugin/
   LuauContractPluginModel.lua
 ```
 
-## Basic Usage
-
-```lua
-local Contracts = require(Contracts)
--- Filesystem tests/examples can use:
--- local Contracts = require("../src")
-
-local PlayerLifecycle = Contracts.lifecycle("Player")
-	:transition("Menu", "Deploy", "DeployRequested")
-	:transition("DeployRequested", "SpawnStarted", "Spawning")
-	:transition("Spawning", "Spawned", "Alive")
-	:transition("Alive", "WeaponAction", "Alive")
-
-local CombatContract = Contracts.system("CombatService")
-	:ownsTag("GeneratedWeaponTool")
-	:mayRead("Player.Character")
-	:mayWrite("Player.Backpack")
-	:mustNeverTouch("Workspace.CurrentArena")
-	:strictPermissions()
-	:lifecycle("Player", PlayerLifecycle)
-	:precondition("CharacterLoaded", function(context)
-		return context.character ~= nil
-	end)
-	:postcondition("PlayerHasOneWeapon", function(context)
-		return context.weaponCount == 1
-	end)
-	:action("WeaponAction", {
-		input = Contracts.object({
-			Action = Contracts.oneOf({ "Fire", "Reload" }),
-			WeaponId = Contracts.stringId(),
-		}),
-		output = Contracts.object({
-			accepted = Contracts.boolean(),
-		}),
-		reads = { "Player.Character" },
-		writes = { "Player.Backpack" },
-		preconditions = { "CharacterLoaded" },
-		postconditions = { "PlayerHasOneWeapon" },
-		lifecycle = {
-			requires = {
-				Player = "Alive",
-			},
-			emits = {
-				Player = "WeaponAction",
-			},
-		},
-		remote = {
-			name = "WeaponAction",
-			direction = "server",
-		},
-		policy = {
-			actorRequired = true,
-		},
-	})
-```
-
-Actions run through one guarded path:
-
-```lua
-local combatSession = CombatContract:lifecycleSession({
-	Player = "Alive",
-})
-
-local result = CombatContract:runAction("WeaponAction", {
-	actor = player,
-	payload = {
-		Action = "Fire",
-		WeaponId = "Rifle",
-	},
-	context = {
-		character = character,
-		weaponCount = 1,
-	},
-	session = combatSession,
-	expectedRevision = combatSession:revision(),
-}, function(scope)
-	local payload = scope:payload()
-
-	return scope:write("Player.Backpack", function()
-		return {
-			accepted = payload.Action == "Fire" or payload.Action == "Reload",
-		}
-	end)
-end)
-```
-
-Permissions can also be checked directly:
-
-```lua
-CombatContract:checkRead("Player.Character", diagnostics)
-CombatContract:checkWrite("Player.Backpack.Rifle", diagnostics)
-CombatContract:checkActionEffect("WeaponAction", {
-	kind = "write",
-	target = "Player.Backpack.Rifle",
-}, diagnostics)
-```
-
-Roblox adapters are available from the same package:
-
-```lua
-local RemoteGuard = Contracts.Roblox.RemoteGuard
-local Ownership = Contracts.Roblox.Ownership
-local PostconditionRunner = Contracts.Roblox.PostconditionRunner
-local OverlayState = Contracts.Roblox.OverlayState
-```
-
-Diagnostics can also feed overlays without a UI dependency:
-
-```lua
-local diagnostics = Contracts.diagnostics({ capacity = 100 })
-local overlay = Contracts.OverlayFeed.new(diagnostics, { maxRows = 8 })
-
-diagnostics:record({
-	level = "error",
-	category = "postcondition",
-	system = "CombatService",
-	name = "OneWeaponToolAfterSpawn",
-	message = "expected exactly one generated weapon tool",
-})
-
-print(overlay:text())
-```
-
-Static checks operate on source text:
-
-```lua
-local report = Contracts.StaticScanner.scanSource(sourceText, {
-	path = "src/server/Modules/CombatService.lua",
-})
-
-print(Contracts.StaticScanner.formatReport(report))
-```
-
-The scanner is heuristic. It is meant for CI and review pressure, not as a
-full Luau parser.
-
-Studio reports combine contract extraction, scanner findings, and optional
-diagnostics:
-
-```lua
-local report = Contracts.Studio.StudioReport.fromScripts(scriptSources, {
-	diagnosticsReport = diagnostics:report(),
-})
-```
-
-The plugin source in `plugin/LuauContractStudioPlugin.lua` renders that report
-inside a dock widget in Roblox Studio.
-
 ## Validation
 
 Run the pure test suite and analyzer:
@@ -243,18 +388,20 @@ these tests run outside Studio. The files under `src/Roblox` are thin adapters
 that should be exercised inside a Roblox place or with fake RemoteEvent-like
 objects.
 
-## Honest Boundary
+## Documentation
 
-The SDK enforces contracts where game code uses it. It can run guarded actions,
-validate guarded remotes, enforce scoped effects and permission capabilities, run
-preconditions and postconditions, record named failures, rate-limit guarded
-remote handlers, mark/check owned Roblox Instances through adapters, and expose
-stable diagnostic data to overlays, reports, or the Studio plugin source.
+- [API](docs/API.md)
+- [Integration](docs/INTEGRATION.md)
 
-It cannot prevent every raw `Destroy()`, every unguarded `OnServerEvent`, or every
-broad cleanup written outside the SDK. The static scanner can flag likely risks in
-source, but game teams still need to route risky code through SDK guards.
+## Usage Notes
+
+The SDK enforces contracts on code paths that use its guards. Route important
+remotes, actions, state transitions, and mutations through the SDK to get
+validation, diagnostics, rate limits, permission checks, and stable reports.
+
+The static scanner can also flag risky source patterns such as raw remote
+handlers, raw remote firing, broad cleanup, and unowned destroys.
 
 ## License
 
-MIT. See `LICENSE`.
+Proprietary. All rights reserved. See `LICENSE`.
