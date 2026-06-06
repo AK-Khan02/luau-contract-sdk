@@ -224,6 +224,47 @@ directory cannot reach the SDK package root with a relative require, pass
 `--sdk-require <module-path>` and use the require path expected by your test
 runner.
 
+Generated attack tests cover malformed payloads, pathological payload sizes,
+missing or unauthorized actors, stale lifecycle revisions, spam against declared
+rate limits, and invalid handler return shapes. Named actor policy fixtures can
+be supplied with `--attack-config`:
+
+```json
+{
+  "actors": {
+    "admin": {
+      "invalid": {
+        "Name": "Guest",
+        "UserId": 2,
+        "IsAdmin": false
+      }
+    }
+  }
+}
+```
+
+```sh
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/replicated/Contracts/*.contract.lua" \
+	--out tests/generated \
+	--attack-config attack-config.json
+```
+
+Scans can report generated artifact coverage without writing files:
+
+```sh
+node tools/luau-contract.js scan \
+	--exact \
+	--contract-module "src/replicated/Contracts/*.contract.lua" \
+	--generated-remotes src/replicated/ContractsGenerated \
+	--generated-tests tests/generated \
+	--format markdown
+```
+
+The generated coverage section reports expected, present, missing, and stale
+generated files plus the attack-case classes covered per remote.
+
 ## Diagnostics Hook
 
 Use one diagnostics instance per game session, server, or subsystem depending on
@@ -308,6 +349,39 @@ node tools/luau-contract.js check generated \
 	--out src/shared/ContractsGenerated \
 	--tests-out tests/generated
 ```
+
+## Remote Migration
+
+The migration commands scan existing scripts for raw server remote handlers and
+produce `Contracts.guardRemote(...)` wrappers:
+
+```sh
+node tools/luau-contract.js migrate scan --format text
+node tools/luau-contract.js migrate suggest --format markdown
+```
+
+`migrate patch` is dry-run by default:
+
+```sh
+node tools/luau-contract.js migrate patch \
+	--contracts-require "../../src/Contracts" \
+	--format markdown
+```
+
+Pass `--write` to update files:
+
+```sh
+node tools/luau-contract.js migrate patch \
+	--contracts-require 'lua:game:GetService("ReplicatedStorage").LuauContractSDK.Contracts' \
+	--write
+```
+
+The patcher currently rewrites conservative `OnServerEvent:Connect(function(...))`
+openings. It scans and suggests `OnServerInvoke` wrappers too, but leaves them
+for manual migration because changing the assignment form also requires changing
+the closing syntax. By default patched schemas allow extra payload fields to
+reduce rollout risk; add `--strict-payload` when the inferred schema should
+reject extra fields immediately.
 
 Exit codes:
 

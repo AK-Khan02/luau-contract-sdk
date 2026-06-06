@@ -387,6 +387,8 @@ use.
 - `LifecycleSession`: stores current lifecycle state, revision, snapshots, and
   guarded transition commits.
 - `RemoteGuard`: Roblox adapter that validates guarded remote calls.
+- `Contracts.guardRemote`: low-friction remote guard for existing remotes that
+  are not ready for a full runtime/action migration.
 - `Diagnostics`: ring buffer for structured contract violations.
 - `Test.RemoteHarness`: pure Luau fake remote harness for contract attack tests.
 - `StudioReport`: plain model for scanner findings, diagnostics, and contract
@@ -428,9 +430,34 @@ luau tests/generated/run.luau
 ```
 
 Generated attack tests send missing fields, wrong types, extra fields, missing
-actors, stale revisions, and rate-limit spam where the contract declares those
-policies. Invalid calls are asserted not to run handlers and to record the
-expected diagnostic.
+actors or unauthorized actor fixtures, stale revisions, pathological string and
+table payloads, rate-limit spam, and bad handler return shapes where the
+contract declares those policies. Invalid calls are asserted not to run handlers
+unless the test is specifically proving response validation after the handler.
+
+Named actor fixtures can be provided with `--attack-config`:
+
+```json
+{
+  "actors": {
+    "admin": {
+      "invalid": {
+        "Name": "Guest",
+        "UserId": 2,
+        "IsAdmin": false
+      }
+    }
+  }
+}
+```
+
+```sh
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out tests/generated \
+	--attack-config attack-config.json
+```
 
 ## Package Shape
 
@@ -466,6 +493,7 @@ src/
     ReportPolicy.lua
     ScanRunner.lua
   Roblox/
+    GuardRemote.lua
     init.lua
     Ownership.lua
     OverlayState.lua
@@ -561,6 +589,23 @@ node tools/luau-contract.js scan \
 The default static scan does not require game modules. Exact mode is opt-in
 because requiring arbitrary gameplay modules can run setup code.
 
+Find existing raw remote handlers and generate migration wrappers:
+
+```sh
+node tools/luau-contract.js migrate scan --format markdown
+node tools/luau-contract.js migrate suggest --format markdown
+node tools/luau-contract.js migrate patch \
+	--contracts-require 'lua:game:GetService("ReplicatedStorage").LuauContractSDK.Contracts' \
+	--write
+```
+
+`migrate patch` is dry-run by default. It rewrites conservative
+`OnServerEvent:Connect(function(...))` handlers to `Contracts.guardRemote(...)`.
+`OnServerInvoke` handlers are scanned and suggested, but not rewritten
+automatically because their closing syntax needs a different transformation.
+Pass a plain string require target for local CLI tests, or prefix with `lua:` to
+insert a raw Roblox require expression.
+
 Generated files can be checked in CI:
 
 ```sh
@@ -579,6 +624,18 @@ node tools/luau-contract.js generate tests \
 
 Use `--custom-type-map custom-types.json` when a custom schema should emit a
 specific Luau type name instead of `any`.
+
+Scans can also report whether generated wrappers and attack tests are present
+and current:
+
+```sh
+node tools/luau-contract.js scan \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--generated-remotes src/shared/ContractsGenerated \
+	--generated-tests tests/generated \
+	--format markdown
+```
 
 ## License
 

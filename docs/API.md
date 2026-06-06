@@ -599,6 +599,57 @@ Useful remote methods:
 - `contract:validateRemoteResponse(name, value, diagnostics, context)`
 - `contract:checkRemoteActor(name, actor, context, diagnostics)`
 
+## Low-Friction Remote Guard
+
+Use `Contracts.guardRemote(remote, options, handler)` when an existing game is
+not ready to introduce a full `System` plus `Runtime` setup. It creates a small
+remote contract behind the scenes and delegates to the same `RemoteGuard`
+validation path as runtime-bound remotes.
+
+```lua
+Contracts.guardRemote(GrantItemRemote, {
+	name = "GrantItem",
+	input = Contracts.object({
+		ItemId = Contracts.stringId(),
+		Amount = Contracts.integer(1, 10),
+	}, {
+		allowExtra = false,
+	}),
+	output = Contracts.object({
+		granted = Contracts.boolean(),
+		itemId = Contracts.stringId(),
+	}, {
+		allowExtra = false,
+	}),
+	actor = "admin",
+	actorPolicies = {
+		admin = function(player)
+			return Admins[player.UserId] == true
+		end,
+	},
+	rateLimit = {
+		maxRequests = 5,
+		windowSeconds = 1,
+	},
+	diagnostics = diagnostics,
+}, function(player, payload)
+	return grantItem(player, payload.ItemId, payload.Amount)
+end)
+```
+
+Supported aliases:
+
+- `input`, `schema`, or `payload`
+- `output`, `response`, or `result`
+- `name` or `remoteName`
+- `kind` or `remoteKind`
+- `actor` or `actorPolicy`
+- `actorPolicies` or `policies`
+
+When `output` or `kind = "function"` is present, the guard binds the remote as a
+RemoteFunction-like value through `OnServerInvoke`. Otherwise it expects a
+RemoteEvent-like value with `OnServerEvent:Connect`.
+
 ## Schemas
 
 Supported schema builders:
@@ -783,9 +834,27 @@ print(harness:handlerCalls("GrantItem"))
 print(harness:lastDiagnostic().name)
 ```
 
-Generated cases cover payload shape violations for declared schemas. They also
-cover missing actors, stale lifecycle revisions, and rate-limit spam when those
-policies are present on the remote.
+Generated cases cover payload shape violations for declared schemas, including
+missing fields, wrong types, extra fields, pathological long strings, deep
+tables, large arrays, and non-finite numbers. They also cover missing or
+configured unauthorized actors, stale lifecycle revisions, rate-limit spam, and
+bad handler return shapes when those policies are present.
+
+Use `--attack-config` to provide invalid actor fixtures for named actor policies:
+
+```json
+{
+  "actors": {
+    "admin": {
+      "invalid": {
+        "Name": "Guest",
+        "UserId": 2,
+        "IsAdmin": false
+      }
+    }
+  }
+}
+```
 
 ## Studio Report
 
@@ -863,6 +932,7 @@ generated wrapper and attack-test file output, and CI exit codes.
 Adapters are available from the package root:
 
 ```lua
+local GuardRemote = Contracts.Roblox.GuardRemote
 local RemoteGuard = Contracts.Roblox.RemoteGuard
 local Ownership = Contracts.Roblox.Ownership
 local PostconditionRunner = Contracts.Roblox.PostconditionRunner
