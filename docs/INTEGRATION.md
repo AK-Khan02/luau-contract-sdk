@@ -187,6 +187,43 @@ runtime:implement("GrantItem", function(scope)
 end)
 ```
 
+## Generated Remotes And Tests
+
+Generate strict Luau wrappers from exact contract modules:
+
+```sh
+node tools/luau-contract.js generate remotes \
+	--exact \
+	--contract-module "src/replicated/Contracts/*.contract.lua" \
+	--out src/replicated/ContractsGenerated
+```
+
+Check generated wrappers in CI:
+
+```sh
+node tools/luau-contract.js generate remotes \
+	--exact \
+	--contract-module "src/replicated/Contracts/*.contract.lua" \
+	--out src/replicated/ContractsGenerated \
+	--check
+```
+
+Generate remote attack tests from the same contracts:
+
+```sh
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/replicated/Contracts/*.contract.lua" \
+	--out tests/generated
+
+luau tests/generated/run.luau
+```
+
+Generated tests require the SDK through a relative path by default. If your test
+directory cannot reach the SDK package root with a relative require, pass
+`--sdk-require <module-path>` and use the require path expected by your test
+runner.
+
 ## Diagnostics Hook
 
 Use one diagnostics instance per game session, server, or subsystem depending on
@@ -256,6 +293,20 @@ node tools/luau-contract.js scan --fail-on error
 node tools/luau-contract.js scan --fail-on warn --max-warnings 0
 node tools/luau-contract.js scan --baseline reports/contracts-baseline.json
 node tools/luau-contract.js scan --update-baseline reports/contracts-baseline.json
+```
+
+Generated artifact policy options:
+
+```sh
+node tools/luau-contract.js generate all \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated \
+	--tests-out tests/generated
+
+node tools/luau-contract.js check generated \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated \
+	--tests-out tests/generated
 ```
 
 Exit codes:

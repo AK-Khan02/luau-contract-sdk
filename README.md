@@ -18,6 +18,7 @@ Use it to define and enforce:
 - lifecycle state requirements and transitions
 - preconditions, postconditions, and named diagnostics
 - runtime handlers, lifecycle sessions, and remote binding
+- generated strict Luau remote wrappers and deterministic remote attack tests
 - stable reports for overlays, docs, tests, and Studio tooling
 - CLI and CI reports for Roblox projects
 
@@ -387,8 +388,49 @@ use.
   guarded transition commits.
 - `RemoteGuard`: Roblox adapter that validates guarded remote calls.
 - `Diagnostics`: ring buffer for structured contract violations.
+- `Test.RemoteHarness`: pure Luau fake remote harness for contract attack tests.
 - `StudioReport`: plain model for scanner findings, diagnostics, and contract
   reports.
+
+## Generated Wrappers And Attack Tests
+
+Exact contract reports can generate strict Luau wrapper modules for remotes:
+
+```sh
+node tools/luau-contract.js generate remotes \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated
+```
+
+Generated client modules expose typed call helpers. Generated server modules bind
+the same remotes through `runtime:bindRemote(...)`; validation still runs through
+the SDK runtime and `RemoteGuard`, not through generated code.
+
+```lua
+local InventoryClient = require(ReplicatedStorage.ContractsGenerated.InventoryServiceClient)
+
+InventoryClient.EquipItem(EquipItemRemote, {
+	ItemId = "Rifle",
+	Slot = 1,
+})
+```
+
+The same exact contract report can generate deterministic attack tests:
+
+```sh
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out tests/generated
+
+luau tests/generated/run.luau
+```
+
+Generated attack tests send missing fields, wrong types, extra fields, missing
+actors, stale revisions, and rate-limit spam where the contract declares those
+policies. Invalid calls are asserted not to run handlers and to record the
+expected diagnostic.
 
 ## Package Shape
 
@@ -429,6 +471,9 @@ src/
     OverlayState.lua
     PostconditionRunner.lua
     RemoteGuard.lua
+  Test/
+    init.lua
+    RemoteHarness.lua
 examples/
   checkpoint.contract.lua
   inventory.contract.lua
@@ -515,6 +560,25 @@ node tools/luau-contract.js scan \
 
 The default static scan does not require game modules. Exact mode is opt-in
 because requiring arbitrary gameplay modules can run setup code.
+
+Generated files can be checked in CI:
+
+```sh
+node tools/luau-contract.js generate remotes \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated \
+	--check
+
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out tests/generated \
+	--check
+```
+
+Use `--custom-type-map custom-types.json` when a custom schema should emit a
+specific Luau type name instead of `any`.
 
 ## License
 

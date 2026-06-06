@@ -356,6 +356,51 @@ print(report.boundRemotes[1])
 print(report.destroyed)
 ```
 
+## Generated Remote Wrappers
+
+The host CLI can generate strict Luau modules from exact contract reports:
+
+```sh
+node tools/luau-contract.js generate remotes \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated
+```
+
+Each contract with remotes emits:
+
+- `<SystemName>Types.luau`
+- `<SystemName>Client.luau`
+- `<SystemName>Server.luau`
+
+The generated modules start with `--!strict`. Schema descriptions become Luau
+type aliases where Luau can express them. Runtime-only constraints such as
+string patterns, integer ranges, actor policies, lifecycle revisions, and rate
+limits remain enforced by `Runtime` and `RemoteGuard`.
+
+Generated server modules use the existing runtime boundary:
+
+```lua
+local InventoryServer = require(ReplicatedStorage.ContractsGenerated.InventoryServiceServer)
+
+InventoryServer.bind(runtime, {
+	EquipItem = EquipItemRemote,
+})
+```
+
+Generated client modules expose typed remote call helpers:
+
+```lua
+local InventoryClient = require(ReplicatedStorage.ContractsGenerated.InventoryServiceClient)
+
+InventoryClient.EquipItem(EquipItemRemote, {
+	ItemId = "Rifle",
+	Slot = 1,
+})
+```
+
+Use `--check` to fail CI when generated files are missing or stale.
+
 ## Lifecycle Sessions
 
 `Lifecycle` defines valid states and transitions. `LifecycleSession` owns the
@@ -701,6 +746,47 @@ Use `-- contracts-scan: ignore <ruleId>` on a line to suppress an intentional
 finding. The scanner is heuristic and operates on source text; host tooling is
 responsible for reading files and passing contents into `scanSource`.
 
+## Remote Attack Tests
+
+The CLI can generate deterministic remote attack suites from exact contracts:
+
+```sh
+node tools/luau-contract.js generate tests \
+	--exact \
+	--contract-module "src/**/*.contract.lua" \
+	--out tests/generated
+
+luau tests/generated/run.luau
+```
+
+Generated suites use `Contracts.Test.remoteHarness(...)`, a pure Luau harness
+that creates fake remotes, binds them through `Runtime:bindRemote`, tracks
+handler calls, and exposes diagnostics.
+
+```lua
+local harness = Contracts.Test.remoteHarness(Contract, {
+	defaultResponses = {
+		GrantItem = {
+			granted = true,
+			itemId = "ValidId",
+		},
+	},
+})
+
+harness:implement("GrantItem")
+harness:bind("GrantItem")
+harness:call("GrantItem", player, {
+	ItemId = 123,
+})
+
+print(harness:handlerCalls("GrantItem"))
+print(harness:lastDiagnostic().name)
+```
+
+Generated cases cover payload shape violations for declared schemas. They also
+cover missing actors, stale lifecycle revisions, and rate-limit spam when those
+policies are present on the remote.
+
 ## Studio Report
 
 ```lua
@@ -769,8 +855,8 @@ Host modules:
   runner used by the CLI.
 
 The executable host command is `tools/luau-contract.js`. It owns filesystem
-project discovery, config loading, subprocess execution, report writing, and CI
-exit codes.
+project discovery, config loading, subprocess execution, report writing,
+generated wrapper and attack-test file output, and CI exit codes.
 
 ## Roblox Adapters
 
