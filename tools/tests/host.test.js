@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 const { globToRegExp } = require("../lib/glob");
+const { emitType } = require("../lib/luauTypeEmitter");
 const { discoverScripts } = require("../lib/projectDiscovery");
 const { renderReport } = require("../lib/reportWriters");
 
@@ -26,6 +27,13 @@ function makeTempProject() {
 		},
 	}, null, 2));
 	return projectRoot;
+}
+
+function makeRepoTempDir(name) {
+	const directory = path.join(repoRoot, `.tmp-${name}-${process.pid}-${Date.now()}`);
+	fs.rmSync(directory, { force: true, recursive: true });
+	fs.mkdirSync(directory, { recursive: true });
+	return directory;
 }
 
 test("glob matcher supports recursive Luau patterns", () => {
@@ -78,6 +86,32 @@ test("report writers render JSON and SARIF", () => {
 
 	assert.match(renderReport(report, "json"), /"raw-remote-handler"/);
 	assert.match(renderReport(report, "sarif"), /"version": "2.1.0"/);
+});
+
+test("luau type emitter maps contract schemas to strict aliases", () => {
+	const emitted = emitType({
+		kind: "object",
+		allowExtra: false,
+		shape: {
+			Action: {
+				kind: "oneOf",
+				values: ["Buy", "Sell"],
+			},
+			ItemId: {
+				kind: "string",
+			},
+			Revision: {
+				kind: "optional",
+				schema: {
+					kind: "integer",
+				},
+			},
+		},
+	});
+
+	assert.match(emitted, /Action: "Buy" \| "Sell"/);
+	assert.match(emitted, /ItemId: string/);
+	assert.match(emitted, /Revision\?: number/);
 });
 
 test("cli scan fails on new raw remote and passes with baseline", () => {
@@ -197,4 +231,103 @@ return {
 	const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
 	assert.equal(report.contracts.some((contract) => contract.name === "ExternalInventory"), true);
 	assert.equal(report.exact.errors.length, 0);
+});
+
+test("cli generates strict remote wrappers and verifies check mode", () => {
+	const outDir = makeRepoTempDir("generated-remotes");
+	try {
+		const run = spawnSync(process.execPath, [
+			cliPath,
+			"generate",
+			"remotes",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--out",
+			outDir,
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+
+		assert.equal(run.status, 0, run.stderr || run.stdout);
+		const clientPath = path.join(outDir, "InventoryServiceClient.luau");
+		const client = fs.readFileSync(clientPath, "utf8");
+		assert.match(client, /--!strict/);
+		assert.match(client, /export type InventoryServiceEquipItemPayload/);
+		assert.match(client, /function Client\.EquipItem/);
+
+		const check = spawnSync(process.execPath, [
+			cliPath,
+			"generate",
+			"remotes",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--out",
+			outDir,
+			"--check",
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(check.status, 0, check.stderr || check.stdout);
+
+		fs.appendFileSync(clientPath, "-- stale\n");
+		const stale = spawnSync(process.execPath, [
+			cliPath,
+			"generate",
+			"remotes",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--out",
+			outDir,
+			"--check",
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(stale.status, 2);
+		assert.match(stale.stderr, /generated files are not up to date/);
+	} finally {
+		fs.rmSync(outDir, { force: true, recursive: true });
+	}
+});
+
+test("cli generates runnable remote attack tests", () => {
+	const outDir = makeRepoTempDir("generated-attacks");
+	try {
+		const generate = spawnSync(process.execPath, [
+			cliPath,
+			"generate",
+			"tests",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--out",
+			outDir,
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+
+		assert.equal(generate.status, 0, generate.stderr || generate.stdout);
+		const suite = fs.readFileSync(path.join(outDir, "InventoryServiceRemoteAttackTests.luau"), "utf8");
+		assert.match(suite, /remote-attack-tests/);
+		assert.match(suite, /missing ItemId/);
+
+		const run = spawnSync("luau", [path.join(outDir, "run.luau")], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(run.status, 0, run.stderr || run.stdout);
+		assert.match(run.stdout, /generated remote attack checks passed/);
+	} finally {
+		fs.rmSync(outDir, { force: true, recursive: true });
+	}
 });

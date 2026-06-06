@@ -5,7 +5,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { baselineKeysFromReport } = require("./lib/ciPolicy");
 const { loadConfig } = require("./lib/config");
+const { fromReport } = require("./lib/contractArtifacts");
+const { writeGeneratedFiles } = require("./lib/generatedFiles");
 const { discoverContractFiles, discoverScripts } = require("./lib/projectDiscovery");
+const { generateRemoteAttackTestFiles } = require("./lib/remoteAttackCaseGenerator");
+const { generateRemoteWrapperFiles } = require("./lib/remoteWrapperGenerator");
 const { runLuauReport } = require("./lib/luauRunner");
 const { writeReports } = require("./lib/reportWriters");
 
@@ -16,6 +20,10 @@ function usage() {
 
 Usage:
   luau-contract scan [options]
+  luau-contract generate remotes [options]
+  luau-contract generate tests [options]
+  luau-contract generate all [options]
+  luau-contract check generated [options]
 
 Options:
   --root <path>              Project root to scan. Defaults to cwd.
@@ -31,6 +39,10 @@ Options:
   --update-baseline <path>   Write the current JSON report for future baseline use.
   --exact                    Load exact contract reports from configured contract modules.
   --contract-module <glob>   Exact contract module glob. Repeatable.
+  --check                    Check generated files without writing them.
+  --tests-out <path>         Output directory for generated attack tests when generating all.
+  --sdk-require <path>       Require path used by generated tests for the SDK.
+  --custom-type-map <path>   JSON map from custom schema names to Luau type names.
   --luau <path>              Luau executable. Defaults to luau.
   --help                     Show this help.
 `;
@@ -69,6 +81,11 @@ function parseArgs(argv) {
 		updateBaselinePath: null,
 		exact: false,
 		contractModules: [],
+		target: null,
+		check: false,
+		testsOut: null,
+		sdkRequire: null,
+		customTypeMapPath: null,
 		luauPath: "luau",
 		help: false,
 	};
@@ -76,6 +93,9 @@ function parseArgs(argv) {
 	const args = argv.slice();
 	if (args[0] && !args[0].startsWith("-")) {
 		options.command = args.shift();
+	}
+	if ((options.command === "generate" || options.command === "check") && args[0] && !args[0].startsWith("-")) {
+		options.target = args.shift();
 	}
 
 	for (let index = 0; index < args.length; index += 1) {
@@ -123,6 +143,17 @@ function parseArgs(argv) {
 		} else if (flag === "--contract-module") {
 			options.contractModules.push(value || takeValue(args, index, flag));
 			if (value == null) index += 1;
+		} else if (flag === "--check") {
+			options.check = true;
+		} else if (flag === "--tests-out") {
+			options.testsOut = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--sdk-require") {
+			options.sdkRequire = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--custom-type-map") {
+			options.customTypeMapPath = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
 		} else if (flag === "--luau") {
 			options.luauPath = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
@@ -161,6 +192,13 @@ function scanConfig(projectConfig, options) {
 		exclude: projectConfig.exclude.concat(options.exclude),
 		contractModules: projectConfig.contractModules.concat(options.contractModules),
 	};
+}
+
+function readCustomTypes(projectRoot, customTypeMapPath) {
+	if (!customTypeMapPath) {
+		return {};
+	}
+	return JSON.parse(fs.readFileSync(path.resolve(projectRoot, customTypeMapPath), "utf8"));
 }
 
 async function runScan(options) {
@@ -204,6 +242,75 @@ async function runScan(options) {
 	return report.policy?.exitCode || 0;
 }
 
+function exactContractsReport(projectRoot, projectConfig, discoveryConfig, options) {
+	const contractFiles = discoverContractFiles(projectRoot, discoveryConfig, discoveryConfig.contractModules);
+	const report = runLuauReport({
+		sdkRoot: SDK_ROOT,
+		projectRoot,
+		scripts: [],
+		contractFiles,
+		luauPath: options.luauPath,
+		policy: {
+			failOn: "error",
+		},
+	});
+
+	if ((report.exact?.errors || []).length > 0) {
+		const details = report.exact.errors.map((error) => `${error.path}: ${error.message}`).join("\n");
+		throw new Error(`cannot generate from contracts with exact load errors:\n${details}`);
+	}
+	return report;
+}
+
+async function runGenerate(options) {
+	const projectRoot = path.resolve(options.root);
+	const projectConfig = loadConfig(projectRoot, options.configPath);
+	const discoveryConfig = scanConfig(projectConfig, options);
+	const report = exactContractsReport(projectRoot, projectConfig, discoveryConfig, options);
+	const artifacts = fromReport(report);
+	const target = options.target || "all";
+	const check = options.check === true || options.command === "check";
+	const customTypes = readCustomTypes(projectRoot, options.customTypeMapPath);
+	const files = [];
+
+	if (target === "all" || target === "remotes" || target === "generated") {
+		const remotesOut = path.resolve(projectRoot, options.out || "src/shared/ContractsGenerated");
+		files.push(...generateRemoteWrapperFiles(artifacts, {
+			outDir: remotesOut,
+			customTypes,
+		}));
+	}
+
+	if (target === "all" || target === "tests" || target === "generated") {
+		const testsOut = path.resolve(projectRoot, options.testsOut || (target === "tests" ? options.out || "tests/generated" : "tests/generated"));
+		files.push(...generateRemoteAttackTestFiles(artifacts, {
+			outDir: testsOut,
+			projectRoot,
+			sdkRoot: SDK_ROOT,
+			sdkRequire: options.sdkRequire,
+		}));
+	}
+
+	if (target !== "all" && target !== "remotes" && target !== "tests" && target !== "generated") {
+		throw new Error(`Unknown generate target: ${target}`);
+	}
+
+	const changed = writeGeneratedFiles(files, {
+		check,
+	});
+
+	for (const warning of artifacts.warnings) {
+		process.stderr.write(`${warning.level}: ${warning.message}\n`);
+	}
+	for (const filePath of changed) {
+		process.stderr.write(`${check ? "would update" : "wrote"} ${filePath}\n`);
+	}
+	if (changed.length === 0) {
+		process.stderr.write("generated files are up to date\n");
+	}
+	return 0;
+}
+
 async function main(argv) {
 	const options = parseArgs(argv);
 	if (options.help) {
@@ -211,6 +318,15 @@ async function main(argv) {
 		return 0;
 	}
 	if (options.command !== "scan") {
+		if (options.command === "generate" || options.command === "check") {
+			if (options.command === "check" && (options.target || "generated") !== "generated") {
+				throw new Error(`Unknown check target: ${options.target}`);
+			}
+			if (options.command === "check") {
+				options.target = "generated";
+			}
+			return runGenerate(options);
+		}
 		throw new Error(`Unknown command: ${options.command}`);
 	}
 	return runScan(options);
