@@ -3,13 +3,18 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { loadAttackConfig } = require("./lib/attackConfig");
 const { baselineKeysFromReport } = require("./lib/ciPolicy");
 const { loadConfig } = require("./lib/config");
 const { fromReport } = require("./lib/contractArtifacts");
+const { generatedCoverage } = require("./lib/generatedCoverage");
 const { writeGeneratedFiles } = require("./lib/generatedFiles");
 const { discoverContractFiles, discoverScripts } = require("./lib/projectDiscovery");
 const { generateRemoteAttackTestFiles } = require("./lib/remoteAttackCaseGenerator");
 const { generateRemoteWrapperFiles } = require("./lib/remoteWrapperGenerator");
+const { applyMigrationPatches } = require("./lib/remoteMigrationPatcher");
+const { scanRemoteMigrations } = require("./lib/remoteMigrationScanner");
+const { renderMigrationReport } = require("./lib/remoteMigrationSuggestions");
 const { runLuauReport } = require("./lib/luauRunner");
 const { writeReports } = require("./lib/reportWriters");
 
@@ -24,6 +29,9 @@ Usage:
   luau-contract generate tests [options]
   luau-contract generate all [options]
   luau-contract check generated [options]
+  luau-contract migrate scan [options]
+  luau-contract migrate suggest [options]
+  luau-contract migrate patch [options]
 
 Options:
   --root <path>              Project root to scan. Defaults to cwd.
@@ -42,7 +50,13 @@ Options:
   --check                    Check generated files without writing them.
   --tests-out <path>         Output directory for generated attack tests when generating all.
   --sdk-require <path>       Require path used by generated tests for the SDK.
+  --attack-config <path>     JSON fixtures for generated actor-policy attack cases.
   --custom-type-map <path>   JSON map from custom schema names to Luau type names.
+  --generated-remotes <path> Include generated wrapper coverage for this directory.
+  --generated-tests <path>   Include generated attack-test coverage for this directory.
+  --write                    Write migration patches. Defaults to dry-run.
+  --contracts-require <path> Require target inserted by migration patch. Use lua:<expr> for raw Luau.
+  --strict-payload           Migration patches reject extra payload fields.
   --luau <path>              Luau executable. Defaults to luau.
   --help                     Show this help.
 `;
@@ -85,7 +99,13 @@ function parseArgs(argv) {
 		check: false,
 		testsOut: null,
 		sdkRequire: null,
+		attackConfigPath: null,
 		customTypeMapPath: null,
+		generatedRemotes: null,
+		generatedTests: null,
+		write: false,
+		contractsRequire: null,
+		strictPayload: false,
 		luauPath: "luau",
 		help: false,
 	};
@@ -94,7 +114,7 @@ function parseArgs(argv) {
 	if (args[0] && !args[0].startsWith("-")) {
 		options.command = args.shift();
 	}
-	if ((options.command === "generate" || options.command === "check") && args[0] && !args[0].startsWith("-")) {
+	if ((options.command === "generate" || options.command === "check" || options.command === "migrate") && args[0] && !args[0].startsWith("-")) {
 		options.target = args.shift();
 	}
 
@@ -151,9 +171,25 @@ function parseArgs(argv) {
 		} else if (flag === "--sdk-require") {
 			options.sdkRequire = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
+		} else if (flag === "--attack-config") {
+			options.attackConfigPath = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
 		} else if (flag === "--custom-type-map") {
 			options.customTypeMapPath = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
+		} else if (flag === "--generated-remotes") {
+			options.generatedRemotes = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--generated-tests") {
+			options.generatedTests = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--write") {
+			options.write = true;
+		} else if (flag === "--contracts-require") {
+			options.contractsRequire = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--strict-payload") {
+			options.strictPayload = true;
 		} else if (flag === "--luau") {
 			options.luauPath = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
@@ -163,6 +199,36 @@ function parseArgs(argv) {
 	}
 
 	return options;
+}
+
+function writeMigrationReports(projectRoot, report, options) {
+	const formats = options.formats.length > 0 ? options.formats : ["text"];
+	if (formats.length > 1 && !options.outDir) {
+		throw new Error("Multiple migration report formats require --out-dir");
+	}
+	if (options.out && formats.length !== 1) {
+		throw new Error("--out can only be used with one --format value");
+	}
+
+	const written = [];
+	for (const format of formats) {
+		const contents = renderMigrationReport(report, format);
+		if (options.out) {
+			const outputPath = path.resolve(projectRoot, options.out);
+			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			fs.writeFileSync(outputPath, contents);
+			written.push(outputPath);
+		} else if (options.outDir) {
+			const extension = format === "markdown" ? "md" : format;
+			const outputPath = path.resolve(projectRoot, options.outDir, `remote-migration.${extension}`);
+			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			fs.writeFileSync(outputPath, contents);
+			written.push(outputPath);
+		} else {
+			process.stdout.write(contents);
+		}
+	}
+	return written;
 }
 
 function readBaselineKeys(projectRoot, baselinePath) {
@@ -225,6 +291,18 @@ async function runScan(options) {
 		},
 	});
 
+	if (options.generatedRemotes || options.generatedTests) {
+		report.generated = generatedCoverage(fromReport(report), {
+			projectRoot,
+			sdkRoot: SDK_ROOT,
+			remotesDir: options.generatedRemotes,
+			testsDir: options.generatedTests,
+			sdkRequire: options.sdkRequire,
+			customTypes: readCustomTypes(projectRoot, options.customTypeMapPath),
+			attackConfig: loadAttackConfig(projectRoot, options.attackConfigPath),
+		});
+	}
+
 	const outputOptions = {
 		formats,
 		out: options.out ? path.resolve(projectRoot, options.out) : null,
@@ -271,6 +349,7 @@ async function runGenerate(options) {
 	const target = options.target || "all";
 	const check = options.check === true || options.command === "check";
 	const customTypes = readCustomTypes(projectRoot, options.customTypeMapPath);
+	const attackConfig = loadAttackConfig(projectRoot, options.attackConfigPath);
 	const files = [];
 
 	if (target === "all" || target === "remotes" || target === "generated") {
@@ -288,6 +367,7 @@ async function runGenerate(options) {
 			projectRoot,
 			sdkRoot: SDK_ROOT,
 			sdkRequire: options.sdkRequire,
+			attackConfig,
 		}));
 	}
 
@@ -311,6 +391,39 @@ async function runGenerate(options) {
 	return 0;
 }
 
+async function runMigrate(options) {
+	const projectRoot = path.resolve(options.root);
+	const projectConfig = loadConfig(projectRoot, options.configPath);
+	const discoveryConfig = scanConfig(projectConfig, options);
+	const target = options.target || "scan";
+
+	if (target !== "scan" && target !== "suggest" && target !== "patch") {
+		throw new Error(`Unknown migrate target: ${target}`);
+	}
+
+	const scripts = discoverScripts(projectRoot, discoveryConfig);
+	const report = scanRemoteMigrations(scripts);
+	report.mode = target;
+
+	if (target === "patch") {
+		report.patches = applyMigrationPatches(projectRoot, report.findings, {
+			contractsRequire: options.contractsRequire,
+			strictPayload: options.strictPayload,
+			write: options.write,
+		});
+		report.summary.patchedCount = report.patches.filter((patch) => patch.status === "patched").length;
+		report.summary.wouldPatchCount = report.patches.filter((patch) => patch.status === "would-patch").length;
+		report.summary.skippedCount = report.patches.filter((patch) => patch.status === "skipped").length;
+	}
+
+	const writtenReports = writeMigrationReports(projectRoot, report, options);
+	for (const filePath of writtenReports) {
+		process.stderr.write(`wrote ${filePath}\n`);
+	}
+
+	return 0;
+}
+
 async function main(argv) {
 	const options = parseArgs(argv);
 	if (options.help) {
@@ -326,6 +439,9 @@ async function main(argv) {
 				options.target = "generated";
 			}
 			return runGenerate(options);
+		}
+		if (options.command === "migrate") {
+			return runMigrate(options);
 		}
 		throw new Error(`Unknown command: ${options.command}`);
 	}

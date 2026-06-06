@@ -4,7 +4,6 @@ const path = require("node:path");
 const {
 	artifactFingerprint,
 	modulePathForRequire,
-	sanitizeIdentifier,
 	sanitizeModuleName,
 } = require("./contractArtifacts");
 
@@ -23,6 +22,9 @@ function luaKey(key) {
 function luaLiteral(value, indent = "") {
 	if (value == null) {
 		return "nil";
+	}
+	if (typeof value === "object" && value.__luauExpression != null) {
+		return value.__luauExpression;
 	}
 	if (typeof value === "string") {
 		return quote(value);
@@ -47,6 +49,12 @@ function luaLiteral(value, indent = "") {
 		return lines.join("\n");
 	}
 	return "nil";
+}
+
+function luaExpression(source) {
+	return {
+		__luauExpression: source,
+	};
 }
 
 function validValue(schema) {
@@ -85,8 +93,45 @@ function invalidValue(schema) {
 	return null;
 }
 
+function invalidResponseValue(schema) {
+	return invalidValue(schema || { kind: "object" });
+}
+
 function cloneJson(value) {
 	return JSON.parse(JSON.stringify(value));
+}
+
+function cloneAttackValue(value) {
+	if (value == null || typeof value !== "object") {
+		return value;
+	}
+	if (value.__luauExpression != null) {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map(cloneAttackValue);
+	}
+	const copy = {};
+	for (const [key, child] of Object.entries(value)) {
+		copy[key] = cloneAttackValue(child);
+	}
+	return copy;
+}
+
+function stringOverflowExpression(schema) {
+	const length = schema.maxLength != null ? schema.maxLength + 1 : 10000;
+	return luaExpression(`largeString(${Math.max(length, 1)})`);
+}
+
+function pathologicalValue(schema) {
+	if (schema == null) return null;
+	if (schema.kind === "string") return stringOverflowExpression(schema);
+	if (schema.kind === "number" || schema.kind === "integer") return luaExpression("math.huge");
+	if (schema.kind === "array") return luaExpression("largeArray(256)");
+	if (schema.kind === "object") return luaExpression("deepTable(80)");
+	if (schema.kind === "vector3") return luaExpression("{ X = math.huge, Y = 0, Z = 0 }");
+	if (schema.kind === "optional") return pathologicalValue(schema.schema);
+	return null;
 }
 
 function payloadCases(remote) {
@@ -117,6 +162,16 @@ function payloadCases(remote) {
 			name: `invalid ${key}`,
 			payload: wrongType,
 		});
+
+		const pathological = pathologicalValue(child);
+		if (pathological != null) {
+			const pathologicalPayload = cloneAttackValue(valid);
+			pathologicalPayload[key] = pathological;
+			cases.push({
+				name: `pathological ${key}`,
+				payload: pathologicalPayload,
+			});
+		}
 	}
 
 	if (schema.allowExtra !== true) {
@@ -128,6 +183,70 @@ function payloadCases(remote) {
 		});
 	}
 
+	return cases;
+}
+
+function actorPolicyForRemote(contract, remote) {
+	if (remote.actor != null) {
+		return remote.actor;
+	}
+	const action = contract.actions[remote.actionName];
+	const policy = action?.policy || {};
+	return policy.actor || policy.authorize || (policy.actorRequired === true ? "required" : null);
+}
+
+function actorCase(contract, remote, attackConfig) {
+	const actorPolicy = actorPolicyForRemote(contract, remote);
+	if (actorPolicy == null) {
+		return null;
+	}
+	if (typeof actorPolicy === "string") {
+		const configuredActor = attackConfig?.actors?.[actorPolicy];
+		if (configuredActor?.invalid !== undefined) {
+			return {
+				name: `unauthorized ${actorPolicy}`,
+				actor: configuredActor.invalid,
+			};
+		}
+	}
+	return {
+		name: "missing actor",
+		actor: null,
+	};
+}
+
+function attackCasesForRemote(contract, remote, attackConfig = {}) {
+	const action = contract.actions[remote.actionName];
+	const responseSchema = action?.output || remote.response;
+	const cases = payloadCases(remote).map((testCase) => ({
+		kind: "payload",
+		name: testCase.name,
+	}));
+	const invalidActorCase = actorCase(contract, remote, attackConfig);
+	if (invalidActorCase != null) {
+		cases.push({
+			kind: "actor",
+			name: invalidActorCase.name,
+		});
+	}
+	if (remote.lifecycle && remote.lifecycle.revision) {
+		cases.push({
+			kind: "lifecycle",
+			name: "stale revision",
+		});
+	}
+	if (remote.rateLimit && remote.rateLimit.maxRequests != null) {
+		cases.push({
+			kind: "rateLimit",
+			name: "spam",
+		});
+	}
+	if (responseSchema) {
+		cases.push({
+			kind: "response",
+			name: "bad response shape",
+		});
+	}
 	return cases;
 }
 
@@ -179,9 +298,8 @@ function bindOptionsLiteral(bindOptions) {
 	return literal;
 }
 
-function testRemoteBlock(contract, remote) {
+function testRemoteBlock(contract, remote, attackConfig) {
 	const action = contract.actions[remote.actionName];
-	const functionName = sanitizeIdentifier(remote.remoteName);
 	const validPayload = validValue(remote.payload);
 	const badCases = payloadCases(remote);
 	const setup = sessionSetup(contract, remote);
@@ -189,29 +307,37 @@ function testRemoteBlock(contract, remote) {
 		[remote.actionName]: defaultResponse(action),
 	};
 	const bindOptions = bindOptionsLiteral(setup.bindOptions);
+	const responseSchema = action?.output || remote.response;
+	const badResponse = responseSchema ? invalidResponseValue(responseSchema) : null;
+	const badResponseDiagnostic = action?.output ? "ActionOutputInvalid" : "RemoteResponseInvalid";
 	const lines = [
 		`do -- ${contract.name}.${remote.remoteName}`,
 		"\tlocal validActor = {",
 		"\t\tName = \"ValidPlayer\",",
 		"\t\tUserId = 1,",
 		"\t}",
-		"\tlocal _missingActor = nil",
 		`\tlocal defaultResponses = ${luaLiteral(defaultResponses, "\t")}`,
-		"\tlocal harness = Contracts.Test.remoteHarness(Contract, {",
-		"\t\tdefaultResponses = defaultResponses,",
-		"\t})",
-		`\tharness:implement(${quote(remote.actionName)})`,
 	];
 
 	for (const setupLine of setup.lines) {
 		lines.push(`\t${setupLine}`);
 	}
 
-	lines.push(`\tharness:bind(${quote(remote.remoteName)}, ${bindOptions})`);
+	lines.push(
+		"\tlocal function newHarness(defaultResponsesOverride)",
+		"\t\tlocal harness = Contracts.Test.remoteHarness(Contract, {",
+		"\t\t\tdefaultResponses = defaultResponsesOverride or defaultResponses,",
+		"\t\t})",
+		`\t\tharness:implement(${quote(remote.actionName)})`,
+		`\t\tharness:bind(${quote(remote.remoteName)}, ${bindOptions})`,
+		"\t\treturn harness",
+		"\tend"
+	);
 
 	for (const testCase of badCases) {
 		lines.push("");
 		lines.push("\tdo");
+		lines.push("\t\tlocal harness = newHarness()");
 		lines.push("\t\tharness:clearDiagnostics()");
 		lines.push(`\t\tlocal beforeCalls = harness:handlerCalls(${quote(remote.actionName)})`);
 		lines.push(`\t\tharness:call(${quote(remote.remoteName)}, validActor, ${luaLiteral(testCase.payload, "\t\t")})`);
@@ -221,14 +347,16 @@ function testRemoteBlock(contract, remote) {
 		lines.push("\tend");
 	}
 
-	if (remote.actor != null) {
+	const invalidActorCase = actorCase(contract, remote, attackConfig);
+	if (invalidActorCase != null) {
 		lines.push("");
 		lines.push("\tdo");
+		lines.push("\t\tlocal harness = newHarness()");
 		lines.push("\t\tharness:clearDiagnostics()");
 		lines.push(`\t\tlocal beforeCalls = harness:handlerCalls(${quote(remote.actionName)})`);
-		lines.push(`\t\tharness:call(${quote(remote.remoteName)}, _missingActor, ${luaLiteral(validPayload, "\t\t")})`);
+		lines.push(`\t\tharness:call(${quote(remote.remoteName)}, ${luaLiteral(invalidActorCase.actor, "\t\t")}, ${luaLiteral(validPayload, "\t\t")})`);
 		lines.push("\t\tlocal actorDiagnostic = harness:lastDiagnostic()");
-		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} rejects missing actor`)}, harness:handlerCalls(${quote(remote.actionName)}) == beforeCalls)`);
+		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} rejects ${invalidActorCase.name}`)}, harness:handlerCalls(${quote(remote.actionName)}) == beforeCalls)`);
 		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} records actor rejection`)}, actorDiagnostic ~= nil and string.find(actorDiagnostic.name, "Actor", 1, true) ~= nil)`);
 		lines.push("\tend");
 	}
@@ -240,6 +368,7 @@ function testRemoteBlock(contract, remote) {
 		}
 		lines.push("");
 		lines.push("\tdo");
+		lines.push("\t\tlocal harness = newHarness()");
 		lines.push("\t\tharness:clearDiagnostics()");
 		lines.push(`\t\tlocal beforeCalls = harness:handlerCalls(${quote(remote.actionName)})`);
 		lines.push(`\t\tharness:call(${quote(remote.remoteName)}, validActor, ${luaLiteral(stalePayload, "\t\t")})`);
@@ -252,12 +381,27 @@ function testRemoteBlock(contract, remote) {
 	if (remote.rateLimit && remote.rateLimit.maxRequests != null) {
 		lines.push("");
 		lines.push("\tdo");
+		lines.push("\t\tlocal harness = newHarness()");
 		lines.push("\t\tharness:clearDiagnostics()");
 		lines.push(`\t\tfor _ = 1, ${(remote.rateLimit.maxRequests || 1) + 1} do`);
 		lines.push(`\t\t\tharness:call(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t\t")})`);
 		lines.push("\t\tend");
 		lines.push("\t\tlocal rateLimitDiagnostic = harness:lastDiagnostic()");
 		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} rate limits spam`)}, rateLimitDiagnostic ~= nil and rateLimitDiagnostic.name == "RemoteRateLimited")`);
+		lines.push("\tend");
+	}
+
+	if (badResponse != null) {
+		lines.push("");
+		lines.push("\tdo");
+		lines.push(`\t\tlocal badResponses = ${luaLiteral({ [remote.actionName]: badResponse }, "\t\t")}`);
+		lines.push("\t\tlocal harness = newHarness(badResponses)");
+		lines.push("\t\tharness:clearDiagnostics()");
+		lines.push(`\t\tlocal beforeCalls = harness:handlerCalls(${quote(remote.actionName)})`);
+		lines.push(`\t\tharness:call(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t")})`);
+		lines.push("\t\tlocal responseDiagnostic = harness:lastDiagnostic()");
+		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} reaches handler for bad response shape`)}, harness:handlerCalls(${quote(remote.actionName)}) == beforeCalls + 1)`);
+		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} records bad response shape`)}, responseDiagnostic ~= nil and responseDiagnostic.name == ${quote(badResponseDiagnostic)})`);
 		lines.push("\tend");
 	}
 
@@ -274,7 +418,7 @@ function generateSuite(contract, options) {
 		contract,
 	});
 
-	const blocks = contract.remotes.map((remote) => testRemoteBlock(contract, remote));
+	const blocks = contract.remotes.map((remote) => testRemoteBlock(contract, remote, options.attackConfig || {}));
 	const contents = [
 		"--!strict",
 		"-- <auto-generated by luau-contract. Do not edit by hand.>",
@@ -283,6 +427,29 @@ function generateSuite(contract, options) {
 		`local Contracts = require(${quote(sdkRequire)})`,
 		`local ContractModule = require(${quote(contractRequire)})`,
 		"local Contract = ContractModule.Contract or ContractModule",
+		"",
+		"local function largeString(length: number): string",
+		"\treturn string.rep(\"A\", length)",
+		"end",
+		"",
+		"local function largeArray(length: number): {any}",
+		"\tlocal values: {any} = {}",
+		"\tfor index = 1, length do",
+		"\t\tvalues[index] = index",
+		"\tend",
+		"\treturn values",
+		"end",
+		"",
+		"local function deepTable(depth: number): any",
+		"\tlocal root: any = {}",
+		"\tlocal cursor: any = root",
+		"\tfor _ = 1, depth do",
+		"\t\tlocal child = {}",
+		"\t\tcursor.child = child",
+		"\t\tcursor = child",
+		"\tend",
+		"\treturn root",
+		"end",
 		"",
 		"return function(check)",
 		blocks.map((block) => block.split("\n").map((line) => `\t${line}`).join("\n")).join("\n\n"),
@@ -353,7 +520,29 @@ function generateRemoteAttackTestFiles(artifacts, options = {}) {
 	return files;
 }
 
+function attackCaseSummary(artifacts, options = {}) {
+	const attackConfig = options.attackConfig || {};
+	const remotes = [];
+	for (const contract of artifacts.contracts || []) {
+		for (const remote of contract.remotes || []) {
+			const cases = attackCasesForRemote(contract, remote, attackConfig);
+			remotes.push({
+				contract: contract.name,
+				remote: remote.remoteName,
+				caseCount: cases.length,
+				cases,
+			});
+		}
+	}
+	return {
+		remoteCount: remotes.length,
+		caseCount: remotes.reduce((total, remote) => total + remote.caseCount, 0),
+		remotes,
+	};
+}
+
 module.exports = {
+	attackCaseSummary,
 	generateRemoteAttackTestFiles,
 	luaLiteral,
 	validValue,

@@ -27,6 +27,18 @@ function textReport(report) {
 		lines.push(`${finding.path}:${finding.line}:${finding.column} [${finding.severity}] ${finding.ruleId} ${finding.message}`);
 	}
 
+	if (report.generated) {
+		const generated = report.generated.summary || {};
+		lines.push(
+			`generated expected=${generated.expectedFileCount || 0} present=${generated.presentFileCount || 0} missing=${generated.missingFileCount || 0} stale=${generated.staleFileCount || 0} attackCases=${generated.attackCaseCount || 0}`
+		);
+		for (const file of report.generated.files || []) {
+			if (!file.exists || file.stale) {
+				lines.push(`generated-${file.exists ? "stale" : "missing"} ${file.kind} ${file.path}`);
+			}
+		}
+	}
+
 	return `${lines.join("\n")}\n`;
 }
 
@@ -157,6 +169,37 @@ function markdownReport(report) {
 			lines.push(`- Remotes: ${markdownList(Object.keys(contract.remotes || {}))}`);
 			lines.push(`- Lifecycles: ${markdownList(Object.keys(contract.lifecycles || {}))}`);
 			lines.push(`- Strict permissions: ${contract.permissions?.strict === true ? "yes" : "no"}`, "");
+		}
+	}
+
+	if (report.generated) {
+		const generated = report.generated.summary || {};
+		lines.push("## Generated Coverage", "");
+		lines.push(`- Expected files: ${generated.expectedFileCount || 0}`);
+		lines.push(`- Present files: ${generated.presentFileCount || 0}`);
+		lines.push(`- Missing files: ${generated.missingFileCount || 0}`);
+		lines.push(`- Stale files: ${generated.staleFileCount || 0}`);
+		lines.push(`- Attack cases: ${generated.attackCaseCount || 0}`, "");
+
+		if ((report.generated.files || []).length > 0) {
+			lines.push("| Status | Kind | Path |");
+			lines.push("| --- | --- | --- |");
+			for (const file of report.generated.files) {
+				const status = !file.exists ? "missing" : file.stale ? "stale" : "current";
+				lines.push(`| ${markdownCell(status)} | ${markdownCell(file.kind)} | ${markdownCell(file.path)} |`);
+			}
+			lines.push("");
+		}
+
+		if ((report.generated.attackCases || []).length > 0) {
+			lines.push("### Attack Cases", "");
+			lines.push("| Remote | Cases | Coverage |");
+			lines.push("| --- | --- | --- |");
+			for (const remote of report.generated.attackCases) {
+				const names = remote.cases.map((testCase) => `${testCase.kind}:${testCase.name}`).join(", ");
+				lines.push(`| ${markdownCell(`${remote.contract}.${remote.remote}`)} | ${remote.caseCount} | ${markdownCell(names)} |`);
+			}
+			lines.push("");
 		}
 	}
 
