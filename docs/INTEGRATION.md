@@ -187,35 +187,80 @@ runtime:implement("GrantItem", function(scope)
 end)
 ```
 
-## Generated Remotes And Tests
+## Generated Remote Workflow
 
-Generate strict Luau wrappers from exact contract modules:
-
-```sh
-node tools/luau-contract.js generate remotes \
-	--exact \
-	--contract-module "src/replicated/Contracts/*.contract.lua" \
-	--out src/replicated/ContractsGenerated
-```
-
-Check generated wrappers in CI:
+Generate strict Luau wrappers, manifests, and attack tests from exact contract
+modules:
 
 ```sh
-node tools/luau-contract.js generate remotes \
+node tools/luau-contract.js generate all \
 	--exact \
 	--contract-module "src/replicated/Contracts/*.contract.lua" \
 	--out src/replicated/ContractsGenerated \
-	--check
+	--tests-out tests/generated
 ```
 
-Generate remote attack tests from the same contracts:
+Each remote contract emits:
+
+- `<SystemName>Types.luau`
+- `<SystemName>Client.luau`
+- `<SystemName>Server.luau`
+- `<SystemName>Manifest.luau`
+- `<SystemName>RemoteAttackTests.luau`
+
+Use generated clients from LocalScripts:
+
+```lua
+local InventoryClient = require(ReplicatedStorage.ContractsGenerated.InventoryServiceClient)
+
+InventoryClient.GrantItem(GrantItemRemote, {
+	ItemId = "Sword",
+	Amount = 1,
+	Revision = 12,
+})
+```
+
+Use generated server wrappers to bind through runtime-owned handlers:
+
+```lua
+local InventoryServer = require(ReplicatedStorage.ContractsGenerated.InventoryServiceServer)
+
+InventoryServer.bind(runtime, {
+	GrantItem = GrantItemRemote,
+}, {
+	GrantItem = function(scope)
+		return grantItem(scope:actor(), scope:payload())
+	end,
+})
+```
+
+Or guard directly before a full runtime migration:
+
+```lua
+InventoryServer.guard(Contracts, InventoryContract, {
+	GrantItem = GrantItemRemote,
+}, {
+	GrantItem = function(player, payload)
+		return grantItem(player, payload)
+	end,
+})
+```
+
+Use one CI proof command to check generated files and run the attack suite:
 
 ```sh
-node tools/luau-contract.js generate tests \
+node tools/luau-contract.js verify remotes \
 	--exact \
 	--contract-module "src/replicated/Contracts/*.contract.lua" \
-	--out tests/generated
+	--generated-remotes src/replicated/ContractsGenerated \
+	--generated-tests tests/generated \
+	--format markdown \
+	--out reports/remote-contracts.md
+```
 
+You can still run the generated attack tests directly:
+
+```sh
 luau tests/generated/run.luau
 ```
 
@@ -262,8 +307,9 @@ node tools/luau-contract.js scan \
 	--format markdown
 ```
 
-The generated coverage section reports expected, present, missing, and stale
-generated files plus the attack-case classes covered per remote.
+The generated coverage and verify sections report expected, present, missing,
+and stale generated files, attack-test status, and policy gaps such as remotes
+without actor, rate-limit, or output policies.
 
 ## Diagnostics Hook
 
@@ -348,6 +394,11 @@ node tools/luau-contract.js check generated \
 	--contract-module "src/**/*.contract.lua" \
 	--out src/shared/ContractsGenerated \
 	--tests-out tests/generated
+
+node tools/luau-contract.js verify remotes \
+	--contract-module "src/**/*.contract.lua" \
+	--generated-remotes src/shared/ContractsGenerated \
+	--generated-tests tests/generated
 ```
 
 ## Remote Migration
@@ -376,12 +427,19 @@ node tools/luau-contract.js migrate patch \
 	--write
 ```
 
-The patcher currently rewrites conservative `OnServerEvent:Connect(function(...))`
-openings. It scans and suggests `OnServerInvoke` wrappers too, but leaves them
-for manual migration because changing the assignment form also requires changing
-the closing syntax. By default patched schemas allow extra payload fields to
-reduce rollout risk; add `--strict-payload` when the inferred schema should
-reject extra fields immediately.
+Generate a draft contract module from the same raw handlers:
+
+```sh
+node tools/luau-contract.js migrate contract \
+	--contracts-require 'lua:game:GetService("ReplicatedStorage").LuauContractSDK.Contracts' \
+	--system-name MigratedRemotes \
+	--out src/replicated/Contracts/MigratedRemotes.contract.lua
+```
+
+The patcher rewrites conservative `OnServerEvent:Connect(function(...))` handlers
+and simple `OnServerInvoke = function(...)` handlers. By default patched schemas
+allow extra payload fields to reduce rollout risk; add `--strict-payload` when
+the inferred schema should reject extra fields immediately.
 
 Exit codes:
 

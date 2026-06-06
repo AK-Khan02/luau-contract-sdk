@@ -372,19 +372,38 @@ Each contract with remotes emits:
 - `<SystemName>Types.luau`
 - `<SystemName>Client.luau`
 - `<SystemName>Server.luau`
+- `<SystemName>Manifest.luau`
 
 The generated modules start with `--!strict`. Schema descriptions become Luau
 type aliases where Luau can express them. Runtime-only constraints such as
 string patterns, integer ranges, actor policies, lifecycle revisions, and rate
 limits remain enforced by `Runtime` and `RemoteGuard`.
 
-Generated server modules use the existing runtime boundary:
+Generated server modules use the existing runtime boundary and can install
+handlers while binding:
 
 ```lua
 local InventoryServer = require(ReplicatedStorage.ContractsGenerated.InventoryServiceServer)
 
 InventoryServer.bind(runtime, {
 	EquipItem = EquipItemRemote,
+}, {
+	EquipItem = function(scope)
+		return equipItem(scope:actor(), scope:payload())
+	end,
+})
+```
+
+Generated server modules also support direct guarded binding when a project wants
+safe remotes before adopting runtime-owned action handlers:
+
+```lua
+InventoryServer.guard(Contracts, InventoryContract, {
+	EquipItem = EquipItemRemote,
+}, {
+	EquipItem = function(player, payload)
+		return equipItem(player, payload)
+	end,
 })
 ```
 
@@ -400,6 +419,16 @@ InventoryClient.EquipItem(EquipItemRemote, {
 ```
 
 Use `--check` to fail CI when generated files are missing or stale.
+
+Use `verify remotes` to check wrappers, attack tests, generated manifests, and
+the generated attack test run in one command:
+
+```sh
+node tools/luau-contract.js verify remotes \
+	--contract-module "src/**/*.contract.lua" \
+	--generated-remotes src/shared/ContractsGenerated \
+	--generated-tests tests/generated
+```
 
 ## Lifecycle Sessions
 
@@ -540,7 +569,40 @@ Useful permission methods:
 
 ## Remote Contracts
 
-Legacy remote validation can still be declared directly:
+Remote contracts can be declared in the contract-first table form:
+
+```lua
+Contract
+	:actorPolicy("admin", function(player)
+		return Admins[player.UserId] == true
+	end)
+	:remote("GrantItem", {
+		input = Contracts.object({
+			ItemId = Contracts.stringId(),
+			Amount = Contracts.integer(1, 10),
+			Revision = Contracts.integer(),
+		}, {
+			allowExtra = false,
+		}),
+		output = Contracts.object({
+			granted = Contracts.boolean(),
+			itemId = Contracts.stringId(),
+		}, {
+			allowExtra = false,
+		}),
+		actor = "admin",
+		lifecycle = {
+			session = "inventory",
+			revision = "Revision",
+		},
+		rateLimit = {
+			maxRequests = 4,
+			windowSeconds = 1,
+		},
+	})
+```
+
+The older schema-plus-options form is still supported:
 
 ```lua
 Contract:remote("WeaponAction", Contracts.object({
@@ -553,7 +615,7 @@ When an action declares `remote = { name = "WeaponAction" }`, the system
 automatically registers that remote with the action input schema and stores the
 action binding in `remoteOptions`.
 
-Remote declarations support richer policy metadata:
+The compatibility form accepts the same policy metadata:
 
 ```lua
 Contract
@@ -582,7 +644,8 @@ Supported remote policy fields:
 - `action`: action name to run through `System:runAction`.
 - `direction`: `server`, `client`, or `bidirectional`.
 - `actor`: `required`, a named actor policy, a policy table, or a function.
-- `response`: schema for RemoteFunction return values.
+- `input`, `schema`, or `payload`: payload schema.
+- `output`, `response`, or `result`: RemoteFunction response schema.
 - `lifecycle.session`: named session resolver used by `RemoteGuard`.
 - `lifecycle.revision`: payload field path or resolver for stale revision checks.
 - `rateLimit.maxRequests`

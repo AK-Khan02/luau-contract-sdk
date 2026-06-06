@@ -1,8 +1,8 @@
 # Luau Contract SDK
 
-A compact Luau contract runtime for Roblox game systems. It turns remote calls,
-server actions, permissions, lifecycle state, diagnostics, and reports into one
-executable contract instead of scattered defensive checks.
+A contract-first remote workflow for Roblox game systems. Define a remote once,
+generate typed client/server APIs, bind it safely, generate exploit-style attack
+tests, and prove the generated surface in CI.
 
 The SDK is built for game systems where a bad call can mutate player data, grant
 items twice, run in the wrong match state, bypass an admin check, or fail without
@@ -24,6 +24,63 @@ Use it to define and enforce:
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
 under `src/Roblox`.
+
+## Remote Workflow
+
+The primary workflow is:
+
+```text
+define remote contract -> generate wrappers -> bind server -> call client -> run attack tests -> verify in CI
+```
+
+```lua
+local InventoryContract = Contracts.system("InventoryService")
+	:actorPolicy("admin", function(player)
+		return Admins[player.UserId] == true
+	end)
+	:remote("GrantItem", {
+		input = Contracts.object({
+			ItemId = Contracts.stringId(),
+			Amount = Contracts.integer(1, 10),
+			Revision = Contracts.integer(),
+		}, {
+			allowExtra = false,
+		}),
+		output = Contracts.object({
+			granted = Contracts.boolean(),
+			itemId = Contracts.stringId(),
+		}, {
+			allowExtra = false,
+		}),
+		actor = "admin",
+		lifecycle = {
+			session = "inventory",
+			revision = "Revision",
+		},
+		rateLimit = {
+			maxRequests = 5,
+			windowSeconds = 1,
+		},
+	})
+```
+
+Then generate and verify the full remote surface:
+
+```sh
+node tools/luau-contract.js generate all \
+	--contract-module "src/**/*.contract.lua" \
+	--out src/shared/ContractsGenerated \
+	--tests-out tests/generated
+
+node tools/luau-contract.js verify remotes \
+	--contract-module "src/**/*.contract.lua" \
+	--generated-remotes src/shared/ContractsGenerated \
+	--generated-tests tests/generated
+```
+
+The generated files include strict Luau client/server wrappers, type aliases, a
+manifest, deterministic remote attack tests, and a CI report covering missing or
+stale generated files plus attack-test results.
 
 ## Why Use It
 
@@ -406,8 +463,10 @@ node tools/luau-contract.js generate remotes \
 ```
 
 Generated client modules expose typed call helpers. Generated server modules bind
-the same remotes through `runtime:bindRemote(...)`; validation still runs through
-the SDK runtime and `RemoteGuard`, not through generated code.
+the same remotes through `runtime:bindRemote(...)`, can install handlers, and can
+guard remotes directly through `RemoteGuard` when a full runtime is not in place.
+Validation still runs through the SDK runtime and adapters, not through duplicated
+generated checks.
 
 ```lua
 local InventoryClient = require(ReplicatedStorage.ContractsGenerated.InventoryServiceClient)
@@ -415,6 +474,28 @@ local InventoryClient = require(ReplicatedStorage.ContractsGenerated.InventorySe
 InventoryClient.EquipItem(EquipItemRemote, {
 	ItemId = "Rifle",
 	Slot = 1,
+})
+```
+
+Generated server wrappers support both runtime-backed and direct guard binding:
+
+```lua
+local InventoryServer = require(ReplicatedStorage.ContractsGenerated.InventoryServiceServer)
+
+InventoryServer.bind(runtime, {
+	GrantItem = GrantItemRemote,
+}, {
+	GrantItem = function(scope)
+		return grantItem(scope:actor(), scope:payload())
+	end,
+})
+
+InventoryServer.guard(Contracts, InventoryContract, {
+	GrantItem = GrantItemRemote,
+}, {
+	GrantItem = function(player, payload)
+		return grantItem(player, payload)
+	end,
 })
 ```
 
@@ -427,6 +508,17 @@ node tools/luau-contract.js generate tests \
 	--out tests/generated
 
 luau tests/generated/run.luau
+```
+
+Use `verify remotes` as the single CI proof command:
+
+```sh
+node tools/luau-contract.js verify remotes \
+	--contract-module "src/**/*.contract.lua" \
+	--generated-remotes src/shared/ContractsGenerated \
+	--generated-tests tests/generated \
+	--format markdown \
+	--out reports/remote-contracts.md
 ```
 
 Generated attack tests send missing fields, wrong types, extra fields, missing
@@ -597,12 +689,16 @@ node tools/luau-contract.js migrate suggest --format markdown
 node tools/luau-contract.js migrate patch \
 	--contracts-require 'lua:game:GetService("ReplicatedStorage").LuauContractSDK.Contracts' \
 	--write
+
+node tools/luau-contract.js migrate contract \
+	--contracts-require 'lua:game:GetService("ReplicatedStorage").LuauContractSDK.Contracts' \
+	--system-name MigratedRemotes \
+	--out src/replicated/Contracts/MigratedRemotes.contract.lua
 ```
 
 `migrate patch` is dry-run by default. It rewrites conservative
-`OnServerEvent:Connect(function(...))` handlers to `Contracts.guardRemote(...)`.
-`OnServerInvoke` handlers are scanned and suggested, but not rewritten
-automatically because their closing syntax needs a different transformation.
+`OnServerEvent:Connect(function(...))` and simple `OnServerInvoke = function(...)`
+handlers to `Contracts.guardRemote(...)`.
 Pass a plain string require target for local CLI tests, or prefix with `lua:` to
 insert a raw Roblox require expression.
 
