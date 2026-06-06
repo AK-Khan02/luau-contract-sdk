@@ -38,6 +38,7 @@ function generatedCoverage(artifacts, options = {}) {
 		const remotesDir = path.resolve(projectRoot, options.remotesDir);
 		files.push(...generateRemoteWrapperFiles(artifacts, {
 			outDir: remotesDir,
+			attackConfig: options.attackConfig || {},
 			customTypes: options.customTypes || {},
 		}).map((file) => fileStatus(projectRoot, file, "remote-wrapper")));
 	}

@@ -30,6 +30,51 @@ function leadingIndent(source, index) {
 	return match ? match[0] : "";
 }
 
+function lineBounds(source, index) {
+	const start = lineStart(source, index);
+	const end = source.indexOf("\n", index);
+	return {
+		start,
+		end: end === -1 ? source.length : end,
+	};
+}
+
+function codeOnly(line) {
+	return line.replace(/--.*$/, "");
+}
+
+function tokenMatches(line) {
+	return codeOnly(line).match(/\b(function|then|do|repeat|end|until)\b/g) || [];
+}
+
+function findFunctionClose(source, openingEnd) {
+	let depth = 1;
+	let cursor = lineBounds(source, openingEnd).end + 1;
+
+	while (cursor > 0 && cursor < source.length) {
+		const bounds = lineBounds(source, cursor);
+		const line = source.slice(bounds.start, bounds.end);
+		const tokens = tokenMatches(line);
+		for (const token of tokens) {
+			if (token === "function" || token === "then" || token === "do" || token === "repeat") {
+				depth += 1;
+			} else if (token === "end" || token === "until") {
+				depth -= 1;
+				if (depth === 0 && token === "end") {
+					const endOffset = line.indexOf("end");
+					const endStart = bounds.start + endOffset;
+					return {
+						start: endStart,
+						end: endStart + 3,
+					};
+				}
+			}
+		}
+		cursor = bounds.end + 1;
+	}
+	return null;
+}
+
 function normalizeArgName(value) {
 	const name = String(value || "").trim().split(":")[0].trim();
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : null;
@@ -158,6 +203,14 @@ function buildFinding(script, match, handlerKind) {
 		inferredFields: inferPayloadFields(script.source, payloadName),
 		patchable: handlerKind === "event",
 	};
+	if (handlerKind === "function") {
+		const close = findFunctionClose(script.source, finding.end);
+		if (close != null) {
+			finding.closeStart = close.start;
+			finding.closeEnd = close.end;
+			finding.patchable = true;
+		}
+	}
 	finding.suggestedContract = renderGuardRemoteSuggestion(finding);
 	return finding;
 }

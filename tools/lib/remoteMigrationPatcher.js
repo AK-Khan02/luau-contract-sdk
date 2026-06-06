@@ -33,13 +33,37 @@ function insertContractsRequire(source, requirePath) {
 	return `${source.slice(0, index)}${contractsRequireLine(requirePath)}${source.slice(index)}`;
 }
 
+function editsForFinding(finding, options) {
+	const edits = [{
+		start: finding.start,
+		end: finding.end,
+		replacement: renderPatchOpening(finding, options),
+	}];
+	if (finding.handlerKind === "function" && finding.closeStart != null && finding.closeEnd != null) {
+		edits.push({
+			start: finding.closeStart,
+			end: finding.closeEnd,
+			replacement: "end)",
+		});
+	}
+	return edits.sort((left, right) => right.start - left.start);
+}
+
+function applyEdits(source, edits) {
+	let patched = source;
+	for (const edit of edits) {
+		patched = `${patched.slice(0, edit.start)}${edit.replacement}${patched.slice(edit.end)}`;
+	}
+	return patched;
+}
+
 function patchFinding(source, finding, options) {
-	return `${source.slice(0, finding.start)}${renderPatchOpening(finding, options)}${source.slice(finding.end)}`;
+	return applyEdits(source, editsForFinding(finding, options));
 }
 
 function canPatchFinding(source, finding, options) {
 	if (!finding.patchable) {
-		return "only OnServerEvent handlers are auto-patchable";
+		return "handler shape is not safely auto-patchable";
 	}
 	if (!hasContractsBinding(source) && !options.contractsRequire) {
 		return "pass --contracts-require so the patcher can insert a Contracts require";

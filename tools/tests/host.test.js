@@ -136,6 +136,13 @@ test("luau type emitter maps contract schemas to strict aliases", () => {
 			ItemId: {
 				kind: "string",
 			},
+			Mode: {
+				kind: "optional",
+				schema: {
+					kind: "oneOf",
+					values: ["solo", "team"],
+				},
+			},
 			Revision: {
 				kind: "optional",
 				schema: {
@@ -147,7 +154,8 @@ test("luau type emitter maps contract schemas to strict aliases", () => {
 
 	assert.match(emitted, /Action: "Buy" \| "Sell"/);
 	assert.match(emitted, /ItemId: string/);
-	assert.match(emitted, /Revision\?: number/);
+	assert.match(emitted, /Mode: \("solo" \| "team"\)\?/);
+	assert.match(emitted, /Revision: number\?/);
 });
 
 test("cli scan fails on new raw remote and passes with baseline", () => {
@@ -306,6 +314,64 @@ end)
 	assert.match(patched, /local Contracts = require\(game:GetService\("ReplicatedStorage"\)\.LuauContractSDK\.Contracts\)/);
 });
 
+test("cli migration patches simple remote functions and drafts contracts", () => {
+	const projectRoot = makeTempProject();
+	const scriptPath = path.join(projectRoot, "src", "UnsafeFunction.server.lua");
+	const contractPath = path.join(projectRoot, "src", "Migrated.contract.lua");
+	fs.writeFileSync(scriptPath, `--!strict
+local GetItem = {}
+
+GetItem.OnServerInvoke = function(player, payload)
+\tif type(payload.ItemId) == "string" then
+\t\treturn { ok = true }
+\tend
+\treturn { ok = false }
+end
+`);
+
+	const contract = spawnSync(process.execPath, [
+		cliPath,
+		"migrate",
+		"contract",
+		"--root",
+		projectRoot,
+		"--contracts-require",
+		"../../src/Contracts",
+		"--system-name",
+		"MigratedInventory",
+		"--out",
+		contractPath,
+	], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.equal(contract.status, 0, contract.stderr || contract.stdout);
+	const draft = fs.readFileSync(contractPath, "utf8");
+	assert.match(draft, /Contracts\.system\("MigratedInventory"\)/);
+	assert.match(draft, /:remote\("GetItem", {/);
+	assert.match(draft, /ItemId = Contracts\.stringId\(\)/);
+	assert.match(draft, /output = Contracts\.any\(\)/);
+
+	const patch = spawnSync(process.execPath, [
+		cliPath,
+		"migrate",
+		"patch",
+		"--root",
+		projectRoot,
+		"--contracts-require",
+		"../../src/Contracts",
+		"--write",
+	], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.equal(patch.status, 0, patch.stderr || patch.stdout);
+	const patched = fs.readFileSync(scriptPath, "utf8");
+	assert.match(patched, /Contracts\.guardRemote\(GetItem/);
+	assert.match(patched, /kind = "function"/);
+	assert.match(patched, /end\)\s*$/);
+});
+
 test("cli exact mode loads configured contract modules", () => {
 	const reportPath = path.join(os.tmpdir(), `luau-contract-exact-${process.pid}.json`);
 	const run = spawnSync(process.execPath, [
@@ -394,10 +460,17 @@ test("cli generates strict remote wrappers and verifies check mode", () => {
 
 		assert.equal(run.status, 0, run.stderr || run.stdout);
 		const clientPath = path.join(outDir, "InventoryServiceClient.luau");
+		const serverPath = path.join(outDir, "InventoryServiceServer.luau");
+		const manifestPath = path.join(outDir, "InventoryServiceManifest.luau");
 		const client = fs.readFileSync(clientPath, "utf8");
+		const server = fs.readFileSync(serverPath, "utf8");
+		const manifest = fs.readFileSync(manifestPath, "utf8");
 		assert.match(client, /--!strict/);
 		assert.match(client, /export type InventoryServiceEquipItemPayload/);
 		assert.match(client, /function Client\.EquipItem/);
+		assert.match(server, /function Server\.guard/);
+		assert.match(server, /function Server\.bind\(runtime: any, remotes: \{\[string\]: any\}, handlersOrOptions: any\?, options: any\?\)/);
+		assert.match(manifest, /attackCaseCount/);
 
 		const check = spawnSync(process.execPath, [
 			cliPath,
@@ -434,6 +507,87 @@ test("cli generates strict remote wrappers and verifies check mode", () => {
 		});
 		assert.equal(stale.status, 2);
 		assert.match(stale.stderr, /generated files are not up to date/);
+	} finally {
+		fs.rmSync(outDir, { force: true, recursive: true });
+	}
+});
+
+test("cli verifies complete remote workflow", () => {
+	const outDir = makeRepoTempDir("verify-remotes");
+	const remotesDir = path.join(outDir, "remotes");
+	const testsDir = path.join(outDir, "tests");
+	const reportPath = path.join(outDir, "verify.json");
+	try {
+		const generate = spawnSync(process.execPath, [
+			cliPath,
+			"generate",
+			"all",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--out",
+			remotesDir,
+			"--tests-out",
+			testsDir,
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(generate.status, 0, generate.stderr || generate.stdout);
+
+		const verify = spawnSync(process.execPath, [
+			cliPath,
+			"verify",
+			"remotes",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--generated-remotes",
+			remotesDir,
+			"--generated-tests",
+			testsDir,
+			"--format",
+			"json",
+			"--out",
+			reportPath,
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(verify.status, 0, verify.stderr || verify.stdout);
+		const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+		assert.equal(report.policy.ok, true);
+		assert.equal(report.verify.attackTestRun.ok, true);
+		assert.equal(report.generated.summary.staleFileCount, 0);
+		assert.equal(report.remoteSecurity.remoteCount, 1);
+
+		fs.appendFileSync(path.join(remotesDir, "InventoryServiceManifest.luau"), "-- stale\n");
+		const stale = spawnSync(process.execPath, [
+			cliPath,
+			"verify",
+			"remotes",
+			"--root",
+			repoRoot,
+			"--contract-module",
+			"examples/inventory.contract.lua",
+			"--generated-remotes",
+			remotesDir,
+			"--generated-tests",
+			testsDir,
+			"--format",
+			"json",
+			"--out",
+			path.join(outDir, "stale.json"),
+		], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(stale.status, 1);
+		const staleReport = JSON.parse(fs.readFileSync(path.join(outDir, "stale.json"), "utf8"));
+		assert.equal(staleReport.generated.summary.staleFileCount > 0, true);
+		assert.equal(staleReport.verify.attackTestRun.skipped, true);
 	} finally {
 		fs.rmSync(outDir, { force: true, recursive: true });
 	}

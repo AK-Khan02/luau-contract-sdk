@@ -39,6 +39,15 @@ function textReport(report) {
 		}
 	}
 
+	if (report.verify) {
+		const run = report.verify.attackTestRun || {};
+		lines.push(`verify remotesDir=${report.verify.remotesDir} testsDir=${report.verify.testsDir}`);
+		lines.push(`verify attackTests=${run.skipped ? "skipped" : run.ok ? "passed" : "failed"} status=${run.status ?? "_none_"}`);
+		for (const reason of report.policy?.reasons || []) {
+			lines.push(`verify-reason ${reason}`);
+		}
+	}
+
 	return `${lines.join("\n")}\n`;
 }
 
@@ -201,6 +210,38 @@ function markdownReport(report) {
 			}
 			lines.push("");
 		}
+	}
+
+	if (report.remoteSecurity) {
+		lines.push("## Remote Security", "");
+		lines.push(`- Remotes: ${report.remoteSecurity.remoteCount || 0}`);
+		lines.push(`- Fully covered: ${report.remoteSecurity.fullyCoveredRemoteCount || 0}`, "");
+		if ((report.remoteSecurity.remotes || []).length > 0) {
+			lines.push("| Remote | Transport | Actor | Rate limit | Output | Lifecycle revision | Attack cases | Gaps |");
+			lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
+			for (const remote of report.remoteSecurity.remotes) {
+				lines.push(`| ${markdownCell(`${remote.contract}.${remote.remote}`)} | ${markdownCell(remote.transport)} | ${remote.hasActorPolicy ? "yes" : "no"} | ${remote.hasRateLimit ? "yes" : "no"} | ${remote.hasOutput ? "yes" : "no"} | ${remote.hasLifecycleRevision ? "yes" : "no"} | ${remote.attackCaseCount || 0} | ${markdownCell((remote.policyGaps || []).join(", ") || "_none_")} |`);
+			}
+			lines.push("");
+		}
+	}
+
+	if (report.verify) {
+		const run = report.verify.attackTestRun || {};
+		lines.push("## Verify", "");
+		lines.push(`- Remotes dir: \`${report.verify.remotesDir}\``);
+		lines.push(`- Tests dir: \`${report.verify.testsDir}\``);
+		lines.push(`- Attack tests: ${run.skipped ? "skipped" : run.ok ? "passed" : "failed"}`);
+		if (run.reason) {
+			lines.push(`- Reason: ${run.reason}`);
+		}
+		if ((report.policy?.reasons || []).length > 0) {
+			lines.push("", "### Policy Reasons", "");
+			for (const reason of report.policy.reasons) {
+				lines.push(`- ${reason}`);
+			}
+		}
+		lines.push("");
 	}
 
 	return `${lines.join("\n")}\n`;

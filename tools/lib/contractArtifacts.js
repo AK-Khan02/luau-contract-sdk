@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
 const { stableStringify } = require("./stableStringify");
 
@@ -36,6 +37,20 @@ function artifactFingerprint(value) {
 			value,
 		}))
 		.digest("hex");
+}
+
+function realpathWithExistingParent(targetPath) {
+	let current = path.resolve(targetPath);
+	const missingParts = [];
+	while (!fs.existsSync(current)) {
+		const parent = path.dirname(current);
+		if (parent === current) {
+			return path.resolve(targetPath);
+		}
+		missingParts.unshift(path.basename(current));
+		current = parent;
+	}
+	return path.join(fs.realpathSync(current), ...missingParts);
 }
 
 function actionForRemote(contract, remoteName, remote) {
@@ -131,7 +146,9 @@ function fromReport(report) {
 }
 
 function modulePathForRequire(fromFile, targetFile) {
-	const relative = path.relative(path.dirname(fromFile), targetFile)
+	const fromDir = realpathWithExistingParent(path.dirname(fromFile));
+	const resolvedTarget = realpathWithExistingParent(targetFile);
+	const relative = path.relative(fromDir, resolvedTarget)
 		.replace(/\\/g, "/")
 		.replace(/\.luau?$/, "");
 	return relative.startsWith(".") ? relative : `./${relative}`;

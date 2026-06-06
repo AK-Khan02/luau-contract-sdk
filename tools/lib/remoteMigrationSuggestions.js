@@ -170,6 +170,7 @@ function renderMigrationReport(report, format) {
 
 module.exports = {
 	renderGuardRemoteSuggestion,
+	renderInputSchema,
 	renderMigrationReport,
 	renderOptionsTable,
 	renderPatchOpening,

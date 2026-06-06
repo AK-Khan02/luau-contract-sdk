@@ -13,8 +13,11 @@ const { discoverContractFiles, discoverScripts } = require("./lib/projectDiscove
 const { generateRemoteAttackTestFiles } = require("./lib/remoteAttackCaseGenerator");
 const { generateRemoteWrapperFiles } = require("./lib/remoteWrapperGenerator");
 const { applyMigrationPatches } = require("./lib/remoteMigrationPatcher");
+const { renderMigrationContract } = require("./lib/remoteMigrationContract");
 const { scanRemoteMigrations } = require("./lib/remoteMigrationScanner");
 const { renderMigrationReport } = require("./lib/remoteMigrationSuggestions");
+const { verifyRemoteWorkflow } = require("./lib/remoteVerify");
+const { remoteSecuritySummary } = require("./lib/remoteContractModel");
 const { runLuauReport } = require("./lib/luauRunner");
 const { writeReports } = require("./lib/reportWriters");
 
@@ -29,9 +32,11 @@ Usage:
   luau-contract generate tests [options]
   luau-contract generate all [options]
   luau-contract check generated [options]
+  luau-contract verify remotes [options]
   luau-contract migrate scan [options]
   luau-contract migrate suggest [options]
   luau-contract migrate patch [options]
+  luau-contract migrate contract [options]
 
 Options:
   --root <path>              Project root to scan. Defaults to cwd.
@@ -56,6 +61,7 @@ Options:
   --generated-tests <path>   Include generated attack-test coverage for this directory.
   --write                    Write migration patches. Defaults to dry-run.
   --contracts-require <path> Require target inserted by migration patch. Use lua:<expr> for raw Luau.
+  --system-name <name>       System name for migrate contract drafts.
   --strict-payload           Migration patches reject extra payload fields.
   --luau <path>              Luau executable. Defaults to luau.
   --help                     Show this help.
@@ -105,6 +111,7 @@ function parseArgs(argv) {
 		generatedTests: null,
 		write: false,
 		contractsRequire: null,
+		systemName: null,
 		strictPayload: false,
 		luauPath: "luau",
 		help: false,
@@ -114,7 +121,7 @@ function parseArgs(argv) {
 	if (args[0] && !args[0].startsWith("-")) {
 		options.command = args.shift();
 	}
-	if ((options.command === "generate" || options.command === "check" || options.command === "migrate") && args[0] && !args[0].startsWith("-")) {
+	if ((options.command === "generate" || options.command === "check" || options.command === "verify" || options.command === "migrate") && args[0] && !args[0].startsWith("-")) {
 		options.target = args.shift();
 	}
 
@@ -187,6 +194,9 @@ function parseArgs(argv) {
 			options.write = true;
 		} else if (flag === "--contracts-require") {
 			options.contractsRequire = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--system-name") {
+			options.systemName = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
 		} else if (flag === "--strict-payload") {
 			options.strictPayload = true;
@@ -292,14 +302,19 @@ async function runScan(options) {
 	});
 
 	if (options.generatedRemotes || options.generatedTests) {
-		report.generated = generatedCoverage(fromReport(report), {
+		const artifacts = fromReport(report);
+		const attackConfig = loadAttackConfig(projectRoot, options.attackConfigPath);
+		report.generated = generatedCoverage(artifacts, {
 			projectRoot,
 			sdkRoot: SDK_ROOT,
 			remotesDir: options.generatedRemotes,
 			testsDir: options.generatedTests,
 			sdkRequire: options.sdkRequire,
 			customTypes: readCustomTypes(projectRoot, options.customTypeMapPath),
-			attackConfig: loadAttackConfig(projectRoot, options.attackConfigPath),
+			attackConfig,
+		});
+		report.remoteSecurity = remoteSecuritySummary(artifacts, {
+			attackConfig,
 		});
 	}
 
@@ -356,6 +371,7 @@ async function runGenerate(options) {
 		const remotesOut = path.resolve(projectRoot, options.out || "src/shared/ContractsGenerated");
 		files.push(...generateRemoteWrapperFiles(artifacts, {
 			outDir: remotesOut,
+			attackConfig,
 			customTypes,
 		}));
 	}
@@ -391,19 +407,76 @@ async function runGenerate(options) {
 	return 0;
 }
 
+async function runVerify(options) {
+	const projectRoot = path.resolve(options.root);
+	const projectConfig = loadConfig(projectRoot, options.configPath);
+	const discoveryConfig = scanConfig(projectConfig, options);
+	const target = options.target || "remotes";
+	if (target !== "remotes") {
+		throw new Error(`Unknown verify target: ${target}`);
+	}
+
+	const exactReport = exactContractsReport(projectRoot, projectConfig, discoveryConfig, options);
+	const artifacts = fromReport(exactReport);
+	const customTypes = readCustomTypes(projectRoot, options.customTypeMapPath);
+	const attackConfig = loadAttackConfig(projectRoot, options.attackConfigPath);
+	const report = verifyRemoteWorkflow(artifacts, {
+		projectRoot,
+		sdkRoot: SDK_ROOT,
+		remotesDir: options.generatedRemotes || "src/shared/ContractsGenerated",
+		testsDir: options.generatedTests || options.testsOut || "tests/generated",
+		sdkRequire: options.sdkRequire,
+		customTypes,
+		attackConfig,
+		luauPath: options.luauPath,
+	});
+	report.contracts = exactReport.contracts;
+	report.exact = exactReport.exact;
+
+	const formats = options.formats.length > 0 ? options.formats : projectConfig.report.formats;
+	const writtenReports = writeReports(report, {
+		formats,
+		out: options.out ? path.resolve(projectRoot, options.out) : null,
+		outDir: options.outDir || projectConfig.report.outDir
+			? path.resolve(projectRoot, options.outDir || projectConfig.report.outDir)
+			: null,
+	});
+	for (const filePath of writtenReports) {
+		process.stderr.write(`wrote ${filePath}\n`);
+	}
+	return report.policy.exitCode;
+}
+
 async function runMigrate(options) {
 	const projectRoot = path.resolve(options.root);
 	const projectConfig = loadConfig(projectRoot, options.configPath);
 	const discoveryConfig = scanConfig(projectConfig, options);
 	const target = options.target || "scan";
 
-	if (target !== "scan" && target !== "suggest" && target !== "patch") {
+	if (target !== "scan" && target !== "suggest" && target !== "patch" && target !== "contract") {
 		throw new Error(`Unknown migrate target: ${target}`);
 	}
 
 	const scripts = discoverScripts(projectRoot, discoveryConfig);
 	const report = scanRemoteMigrations(scripts);
 	report.mode = target;
+
+	if (target === "contract") {
+		const contents = renderMigrationContract(report.findings, {
+			contractsRequire: options.contractsRequire,
+			strictPayload: options.strictPayload,
+			systemName: options.systemName,
+		});
+		if (options.out) {
+			const outputPath = path.resolve(projectRoot, options.out);
+			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			fs.writeFileSync(outputPath, contents);
+			process.stderr.write(`wrote ${outputPath}\n`);
+		} else {
+			process.stdout.write(contents);
+		}
+		return 0;
+	}
 
 	if (target === "patch") {
 		report.patches = applyMigrationPatches(projectRoot, report.findings, {
@@ -439,6 +512,9 @@ async function main(argv) {
 				options.target = "generated";
 			}
 			return runGenerate(options);
+		}
+		if (options.command === "verify") {
+			return runVerify(options);
 		}
 		if (options.command === "migrate") {
 			return runMigrate(options);

@@ -1,6 +1,7 @@
 "use strict";
 
 const { sanitizeIdentifier } = require("./contractArtifacts");
+const { outputSchemaForRemote } = require("./remoteContractModel");
 
 function sortedEntries(value) {
 	return Object.entries(value || {}).sort(([left], [right]) => left.localeCompare(right));
@@ -38,9 +39,7 @@ function isOptionalSchema(schema) {
 function emitObject(schema, options) {
 	const lines = ["{"];
 	for (const [key, childSchema] of sortedEntries(schema.shape)) {
-		const optional = isOptionalSchema(childSchema);
-		const childType = emitType(optional ? childSchema.schema : childSchema, options);
-		lines.push(`\t${fieldKey(key)}${optional ? "?" : ""}: ${childType},`);
+		lines.push(`\t${fieldKey(key)}: ${emitType(childSchema, options)},`);
 	}
 	if (schema.allowExtra === true) {
 		lines.push("\t[string]: any,");
@@ -80,7 +79,9 @@ function emitType(schema, options = {}) {
 		return literalType(schema.expected);
 	}
 	if (schema.kind === "optional") {
-		return `${emitType(schema.schema, options)}?`;
+		const innerType = emitType(schema.schema, options);
+		const optionalType = innerType.includes("\n") || innerType.includes(" | ") ? `(${innerType})` : innerType;
+		return `${optionalType}?`;
 	}
 	if (schema.kind === "array") {
 		return `{${emitType(schema.schema, options)}}`;
@@ -99,8 +100,9 @@ function emitRemoteTypes(contract, options = {}) {
 	const blocks = [];
 	for (const remote of contract.remotes) {
 		blocks.push(`export type ${typeNameFor(contract.name, remote.remoteName, "Payload")} = ${emitType(remote.payload, options)}`);
-		if (remote.response != null) {
-			blocks.push(`export type ${typeNameFor(contract.name, remote.remoteName, "Response")} = ${emitType(remote.response, options)}`);
+		const outputSchema = outputSchemaForRemote(contract, remote);
+		if (outputSchema != null) {
+			blocks.push(`export type ${typeNameFor(contract.name, remote.remoteName, "Response")} = ${emitType(outputSchema, options)}`);
 		}
 	}
 	return `${blocks.join("\n\n")}\n`;
