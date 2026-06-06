@@ -119,5 +119,11 @@ return function(test)
 	time = 1
 	check("rate limiter resets after window", limiter:check("player", "Deploy") == true)
 
+	local anonymousLimiter = Contracts.RateLimiter.new({ maxRequests = 1, windowSeconds = 1 }, function()
+		return time
+	end)
+	check("rate limiter accepts nil key", anonymousLimiter:check(nil, "Deploy") == true)
+	check("rate limiter limits repeated nil key", anonymousLimiter:check(nil, "Deploy") == false)
+
 	return weaponContract
 end

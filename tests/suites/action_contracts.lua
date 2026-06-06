@@ -77,6 +77,21 @@ return function(test)
 	check("action remote options include rate limit", grantContract:remoteOptions("GrantItem").rateLimit.maxRequests == 4)
 	check("action input validates", grantContract:validateActionInput("GrantItem", { ItemId = "Rifle" }).ok == true)
 
+	local quickRemoteContract = Contracts.system("QuickRemoteService")
+		:remote("GrantItem", {
+			input = GrantItemInput,
+			output = GrantItemOutput,
+			actor = "required",
+			rateLimit = {
+				maxRequests = 2,
+				windowSeconds = 1,
+			},
+		})
+	local quickRemoteOptions = quickRemoteContract:remoteOptions("GrantItem")
+	check("remote table form validates input", quickRemoteContract:validateRemote("GrantItem", { ItemId = "Rifle" }).ok == true)
+	check("remote table form stores output as response", quickRemoteOptions.response ~= nil)
+	check("remote table form stores actor policy", quickRemoteOptions.actor == "required")
+
 	local diagnostics = Contracts.diagnostics()
 	local result = grantContract:runAction("GrantItem", {
 		actor = "PlayerA",

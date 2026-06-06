@@ -191,7 +191,7 @@ local function rateLimitKey(rateLimit, player, payload, remoteName)
 		if ok and value ~= nil then
 			return value
 		end
-		return player
+		return player or "__anonymous"
 	end
 	if key == "global" then
 		return "__global"
@@ -200,9 +200,9 @@ local function rateLimitKey(rateLimit, player, payload, remoteName)
 		return remoteName
 	end
 	if type(key) == "string" and string.sub(key, 1, 8) == "payload." then
-		return fieldPathValue(payload, string.sub(key, 9)) or player
+		return fieldPathValue(payload, string.sub(key, 9)) or player or "__anonymous"
 	end
-	return player
+	return player or "__anonymous"
 end
 
 local function checkRateLimit(limiter, rateLimit, player, payload, remoteName, diagnostics, systemContract)

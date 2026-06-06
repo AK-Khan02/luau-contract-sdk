@@ -12,6 +12,7 @@ export type Entry = {
 
 local RateLimiter: any = {}
 RateLimiter.__index = RateLimiter
+local NIL_KEY = {}
 
 local function defaultClock(): number
 	if os and os.clock then
@@ -32,10 +33,11 @@ function RateLimiter.new(config: Config?, clock: (() -> number)?): any
 end
 
 function RateLimiter._entry(self: any, key: any, action: string): Entry
-	local keyEntries = self._entries[key]
+	local normalizedKey = if key == nil then NIL_KEY else key
+	local keyEntries = self._entries[normalizedKey]
 	if not keyEntries then
 		keyEntries = {}
-		self._entries[key] = keyEntries
+		self._entries[normalizedKey] = keyEntries
 	end
 
 	local entry = keyEntries[action]

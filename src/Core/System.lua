@@ -166,6 +166,28 @@ local function normalizeRemoteBinding(actionName: string, remote: any): any?
 	return normalized
 end
 
+local function normalizeRemoteDeclaration(remoteName: string, schemaOrDefinition: any, options: any?): (any, any?)
+	if options ~= nil then
+		return schemaOrDefinition, options
+	end
+
+	if type(schemaOrDefinition) ~= "table" then
+		return schemaOrDefinition, options
+	end
+
+	local input = schemaOrDefinition.input or schemaOrDefinition.schema or schemaOrDefinition.payload
+	if input == nil then
+		return schemaOrDefinition, options
+	end
+
+	local remoteOptions = copyMap(schemaOrDefinition)
+	remoteOptions.input = nil
+	remoteOptions.schema = nil
+	remoteOptions.payload = nil
+	remoteOptions.name = remoteOptions.name or remoteOptions.remoteName or remoteName
+	return input, remoteOptions
+end
+
 local function normalizeCheckReferences(kind: string, references: any?): any
 	if references == nil then
 		return {}
@@ -490,7 +512,8 @@ function System.strictPermissions(self: any, enabled: boolean?): any
 end
 
 function System.remote(self: any, remoteName: string, schema: any, options: any?): any
-	self._remotes[remoteName] = RemotePolicy.normalize(remoteName, schema, options)
+	local remoteSchema, remoteOptions = normalizeRemoteDeclaration(remoteName, schema, options)
+	self._remotes[remoteName] = RemotePolicy.normalize(remoteName, remoteSchema, remoteOptions)
 	return self
 end
 
