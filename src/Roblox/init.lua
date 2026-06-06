@@ -7,6 +7,7 @@ local function load(primaryPath, fallbackPath)
 end
 
 return {
+	GuardRemote = load("./GuardRemote", "./Roblox/GuardRemote"),
 	Ownership = load("./Ownership", "./Roblox/Ownership"),
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),

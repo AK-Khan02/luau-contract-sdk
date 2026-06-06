@@ -57,6 +57,10 @@ function Contracts.system(name)
 	return System.new(name)
 end
 
+function Contracts.guardRemote(remote, options, handler)
+	return Roblox.GuardRemote.connect(remote, options, handler)
+end
+
 Contracts.any = Schema.any
 Contracts.arrayOf = Schema.arrayOf
 Contracts.boolean = Schema.boolean

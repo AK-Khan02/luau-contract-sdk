@@ -58,8 +58,70 @@ return function(test)
 	connectedHandler("PlayerA", { Action = "Hack", WeaponId = "Rifle" })
 	check("remote guard records invalid payload", guardDiagnostics:last().name == "RemotePayloadInvalid")
 
+	test:section("guardRemote")
+
+	local guardedFunction = {
+		Name = "GrantItem",
+		OnServerInvoke = function() end,
+	}
+	local guardedDiagnostics = Contracts.diagnostics()
+	local guardedCalls = 0
+	Contracts.guardRemote(guardedFunction, {
+		input = Contracts.object({
+			ItemId = Contracts.stringId(),
+		}, {
+			allowExtra = false,
+		}),
+		output = Contracts.object({
+			Granted = Contracts.boolean(),
+		}, {
+			allowExtra = false,
+		}),
+		actor = "admin",
+		actorPolicies = {
+			admin = function(player)
+				return player ~= nil and player.IsAdmin == true
+			end,
+		},
+		diagnostics = guardedDiagnostics,
+	}, function()
+		guardedCalls += 1
+		return {
+			Granted = true,
+		}
+	end)
+
+	local guardedResult = guardedFunction.OnServerInvoke({ IsAdmin = true }, { ItemId = "Sword" })
+	check("guardRemote binds a named remote function", guardedResult.Granted == true and guardedCalls == 1)
+
+	guardedFunction.OnServerInvoke({ IsAdmin = false }, { ItemId = "Sword" })
+	check("guardRemote applies named actor policy", guardedDiagnostics:last().name == "RemoteActorRejected")
+
+	guardedFunction.OnServerInvoke({ IsAdmin = true }, { ItemId = "../../Exploit" })
+	check("guardRemote validates payload shape", guardedDiagnostics:last().name == "RemotePayloadInvalid")
+
+	Contracts.guardRemote(guardedFunction, {
+		name = "BadGrantItemResult",
+		input = Contracts.object({}, {
+			allowExtra = false,
+		}),
+		output = Contracts.object({
+			Granted = Contracts.boolean(),
+		}, {
+			allowExtra = false,
+		}),
+		diagnostics = guardedDiagnostics,
+	}, function()
+		return {
+			Granted = "yes",
+		}
+	end)
+	guardedFunction.OnServerInvoke({ IsAdmin = true }, {})
+	check("guardRemote validates handler response", guardedDiagnostics:last().name == "RemoteResponseInvalid")
+
 	test:section("Roblox adapters")
 
+	check("adapter init exports guardRemote", RobloxAdapters.GuardRemote ~= nil)
 	check("adapter init exports remote guard", RobloxAdapters.RemoteGuard == RemoteGuard)
 	check("adapter init exports overlay state", RobloxAdapters.OverlayState ~= nil)
 
