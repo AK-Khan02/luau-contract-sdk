@@ -14,6 +14,7 @@ local Schema = require("./Core/Schema")
 local StaticScanner = require("./Core/StaticScanner")
 local Studio = require("./Studio")
 local System = require("./Core/System")
+local Test = require("./Test")
 
 local Contracts = {
 	Diagnostics = Diagnostics,
@@ -32,6 +33,7 @@ local Contracts = {
 	StaticScanner = StaticScanner,
 	Studio = Studio,
 	System = System,
+	Test = Test,
 	version = Package.version,
 }
 
