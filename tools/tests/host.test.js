@@ -618,6 +618,10 @@ test("cli generates runnable remote attack tests", () => {
 		assert.match(suite, /pathological ItemId/);
 		assert.match(suite, /missing actor/);
 		assert.match(suite, /bad response shape/);
+		assert.match(suite, /never interleaves in-flight duplicates/);
+		assert.match(suite, /records ActionBusy for in-flight duplicate/);
+		assert.match(suite, /times out stuck handler/);
+		assert.match(suite, /blocks commits after timeout/);
 
 		const run = spawnSync("luau", [path.join(outDir, "run.luau")], {
 			cwd: repoRoot,
@@ -625,6 +629,74 @@ test("cli generates runnable remote attack tests", () => {
 		});
 		assert.equal(run.status, 0, run.stderr || run.stdout);
 		assert.match(run.stdout, /generated remote attack checks passed/);
+	} finally {
+		fs.rmSync(outDir, { force: true, recursive: true });
+	}
+});
+
+test("remote attack generator emits async cases for session contracts", () => {
+	const outDir = makeRepoTempDir("async-attacks");
+	try {
+		const artifacts = {
+			contracts: [
+				{
+					name: "MatchService",
+					path: "src/match.contract.lua",
+					actions: {
+						AdvanceRound: {
+							input: {
+								kind: "object",
+								allowExtra: false,
+								shape: {
+									Revision: { kind: "integer" },
+								},
+							},
+							async: {
+								timeoutSeconds: 5,
+							},
+							policy: {},
+						},
+					},
+					remotes: [
+						{
+							remoteName: "AdvanceRound",
+							actionName: "AdvanceRound",
+							payload: {
+								kind: "object",
+								allowExtra: false,
+								shape: {
+									Revision: { kind: "integer" },
+								},
+							},
+							lifecycle: {
+								session: "match",
+								revision: "Revision",
+							},
+							rateLimit: null,
+							response: null,
+						},
+					],
+				},
+			],
+		};
+
+		const summary = attackCaseSummary(artifacts);
+		const caseNames = summary.remotes[0].cases.map((testCase) => testCase.name);
+		assert.equal(caseNames.includes("in-flight duplicate"), true);
+		assert.equal(caseNames.includes("handler timeout"), true);
+		assert.equal(caseNames.includes("stale revision after yield"), true);
+
+		const files = generateRemoteAttackTestFiles(artifacts, {
+			outDir,
+			projectRoot: repoRoot,
+			sdkRoot: repoRoot,
+		});
+		const suite = files.find((file) => file.path.endsWith("MatchServiceRemoteAttackTests.luau")).contents;
+		assert.match(suite, /never interleaves in-flight duplicates/);
+		assert.match(suite, /settles every duplicate call/);
+		assert.match(suite, /refuses stale revision after yield/);
+		assert.match(suite, /lifecycleSession\(\{\}, \{ revision = 1 \}\)/);
+		assert.doesNotMatch(suite, /records ActionBusy/);
 	} finally {
 		fs.rmSync(outDir, { force: true, recursive: true });
 	}

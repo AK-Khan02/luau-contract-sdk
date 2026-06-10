@@ -97,12 +97,22 @@ function RemoteHarness.new(systemContract: any, options: any?): any
 		_runtime = config.runtime or Runtime.new(systemContract, {
 			diagnostics = diagnostics,
 			sessions = config.sessions,
+			scheduler = config.scheduler,
 		}),
 		_diagnostics = diagnostics,
+		_scheduler = config.scheduler,
 		_remotes = {},
 		_handlerCalls = {},
+		_pendingThreads = {},
 		_defaultResponses = config.defaultResponses or {},
 	}, RemoteHarness)
+end
+
+function RemoteHarness._requireScheduler(self: any): any
+	if self._scheduler == nil then
+		error("RemoteHarness needs options.scheduler for async helpers; pass Contracts.Test.manualScheduler()", 3)
+	end
+	return self._scheduler
 end
 
 function RemoteHarness.contract(self: any): any
@@ -131,6 +141,73 @@ function RemoteHarness.implement(self: any, actionName: string, handler: (((any,
 		overwrite = true,
 	})
 	return self
+end
+
+function RemoteHarness.implementYielding(self: any, actionName: string, handler: (((any, any) -> any))?): any
+	self:_requireScheduler()
+	local pending = self._pendingThreads
+	local defaultResponses = self._defaultResponses
+	local handlerFunction = handler
+	return self:implement(actionName, function(scope: any, request: any)
+		local queue = pending[actionName]
+		if queue == nil then
+			queue = {}
+			pending[actionName] = queue
+		end
+		table.insert(queue, coroutine.running())
+		coroutine.yield()
+
+		if handlerFunction ~= nil then
+			return handlerFunction(scope, request)
+		end
+		return defaultHandlerResult(defaultResponses, actionName)
+	end)
+end
+
+function RemoteHarness.pendingHandlerCount(self: any, actionName: string): number
+	local queue = self._pendingThreads[actionName]
+	if queue == nil then
+		return 0
+	end
+	return #queue
+end
+
+function RemoteHarness.resume(self: any, actionName: string): boolean
+	local scheduler = self:_requireScheduler()
+	local queue = self._pendingThreads[actionName]
+	if queue == nil or #queue == 0 then
+		return false
+	end
+
+	local thread = table.remove(queue, 1)
+	local spawnFn = scheduler.spawn :: (any) -> any
+	spawnFn(thread)
+	return true
+end
+
+function RemoteHarness.callAsync(self: any, remoteName: string, player: any, payload: any): any
+	local scheduler = self:_requireScheduler()
+	local state = {
+		settled = false,
+		result = nil,
+	}
+
+	local spawnFn = scheduler.spawn :: (any) -> any
+	spawnFn(function()
+		state.result = self:call(remoteName, player, payload)
+		state.settled = true
+	end)
+
+	return state
+end
+
+function RemoteHarness.advance(self: any, seconds: number)
+	local scheduler = self:_requireScheduler()
+	if type(scheduler.advance) ~= "function" then
+		error("RemoteHarness.advance needs a scheduler with advance (use Contracts.Test.manualScheduler())", 2)
+	end
+	local advanceFn = scheduler.advance :: (number) -> ()
+	advanceFn(seconds)
 end
 
 function RemoteHarness.bind(self: any, remoteName: string, options: any?): any

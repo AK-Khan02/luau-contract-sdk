@@ -10,9 +10,11 @@ local suites = {
 	require("./suites/lifecycle_sessions"),
 	require("./suites/remote_policies_reports"),
 	require("./suites/runtime"),
+	require("./suites/async_actions"),
 	require("./suites/test_harness"),
 	require("./suites/adapters_examples"),
 	require("./suites/scanner_studio"),
+	require("./suites/studio_bridge"),
 	require("./suites/host_tools"),
 }
 

@@ -1,5 +1,7 @@
+local AsyncGate = require("../Core/AsyncGate")
 local RateLimiter = require("../Core/RateLimiter")
 local Schema = require("../Core/Schema")
+local TaskScheduler = require("./TaskScheduler")
 
 local RemoteGuard = {}
 
@@ -274,7 +276,40 @@ local function checkRemoteActor(systemContract, remoteName, player, context, dia
 	return result.ok == true
 end
 
-local function runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
+local function resolveAsyncPolicy(systemContract, actionName): any
+	if actionName == nil or type(systemContract.actionOptions) ~= "function" then
+		return nil
+	end
+
+	local actionOptions: any = systemContract:actionOptions(actionName)
+	if actionOptions == nil then
+		return nil
+	end
+	return actionOptions.async
+end
+
+local function resolveAsyncGate(options, asyncPolicy, actionName): any
+	if asyncPolicy == nil then
+		return nil
+	end
+	if options.asyncGate ~= nil then
+		return options.asyncGate
+	end
+
+	local scheduler = options.scheduler or TaskScheduler.default()
+	if scheduler == nil then
+		error(
+			"RemoteGuard.connect binds async action " .. tostring(actionName)
+				.. " and needs options.asyncGate or options.scheduler",
+			4
+		)
+	end
+	return AsyncGate.new({
+		scheduler = scheduler,
+	})
+end
+
+local function runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics, asyncGate, asyncPolicy)
 	local context = remoteContext(options, player, payload, remoteName)
 	local validation = validateActionPayload(systemContract, remoteOptions.action, remoteName, payload, diagnostics, context)
 	if not validation.ok then
@@ -299,17 +334,43 @@ local function runActionRemote(systemContract, remoteName, remoteOptions, handle
 		return nil
 	end
 
-	local actionResult = systemContract:runAction(remoteOptions.action, {
-		actor = player,
-		payload = payload,
-		diagnostics = diagnostics,
-		states = options.states,
-		session = session,
-		expectedRevision = revision,
-		context = actionContext(options, player, payload, remoteName),
-	}, function(scope)
-		return handler(player, scope:payload(), scope)
-	end)
+	local function execute(cancelToken)
+		return systemContract:runAction(remoteOptions.action, {
+			actor = player,
+			payload = payload,
+			diagnostics = diagnostics,
+			states = options.states,
+			session = session,
+			expectedRevision = revision,
+			context = actionContext(options, player, payload, remoteName),
+			cancelToken = cancelToken,
+		}, function(scope)
+			return handler(player, scope:payload(), scope)
+		end)
+	end
+
+	local actionResult: any
+	if asyncPolicy ~= nil and asyncGate ~= nil then
+		local key: any = session
+		if key == nil then
+			key = player
+		end
+		if key == nil then
+			key = remoteName
+		end
+
+		local gate: any = options.asyncGate
+		actionResult = gate:run(key, {
+			concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
+			timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
+			system = systemContract:name(),
+			action = remoteOptions.action,
+			remote = remoteName,
+			diagnostics = diagnostics,
+		}, execute)
+	else
+		actionResult = execute(nil)
+	end
 
 	if not actionResult.ok then
 		return nil
@@ -373,6 +434,9 @@ function RemoteGuard.connect(systemContract, remoteName, remote, handler, option
 	remoteOptions.rateLimit = options.rateLimit or remoteOptions.rateLimit
 	remoteOptions.lifecycle = options.lifecycle or remoteOptions.lifecycle or {}
 
+	local asyncPolicy = resolveAsyncPolicy(systemContract, remoteOptions.action)
+	local asyncGate = resolveAsyncGate(options, asyncPolicy, remoteOptions.action)
+
 	assertServerDirection(remoteName, remoteOptions.direction)
 
 	local limiter = remoteOptions.rateLimit and RateLimiter.new(remoteOptions.rateLimit, options.clock) or nil
@@ -382,7 +446,7 @@ function RemoteGuard.connect(systemContract, remoteName, remote, handler, option
 		end
 
 		if remoteOptions.action and systemContract.runAction then
-			return runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
+			return runActionRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics, asyncGate, asyncPolicy)
 		end
 		return runLegacyRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
 	end

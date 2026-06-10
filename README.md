@@ -18,8 +18,10 @@ Use it to define and enforce:
 - lifecycle state requirements and transitions
 - preconditions, postconditions, and named diagnostics
 - runtime handlers, lifecycle sessions, and remote binding
+- async (yielding) handlers with concurrency policies, timeouts, and cancellation
 - generated strict Luau remote wrappers and deterministic remote attack tests
 - stable reports for overlays, docs, tests, and Studio tooling
+- live diagnostics streaming into the Studio plugin during play-tests
 - CLI and CI reports for Roblox projects
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
@@ -427,6 +429,42 @@ print(runtimeReport.system.name)
 Diagnostics are structured. Contract and runtime reports are serializable. Studio
 tooling, overlays, tests, and docs can consume the same model that runtime guards
 use.
+
+### Async Actions
+
+Handlers that yield (DataStore, MessagingService, HTTP) declare `async` on the
+action so the guarantees survive the yield:
+
+```lua
+:action("GrantItem", {
+	input = GrantItemSchema,
+	writes = { "PlayerData/Inventory" },
+	async = {
+		timeoutSeconds = 10,
+		concurrency = "serialize", -- or "reject" / "allow"
+	},
+})
+```
+
+Duplicate in-flight calls are serialized or rejected (`ActionBusy`), stuck
+handlers time out (`ActionTimeout`) without leaving the client hanging, and a
+lifecycle session that moved during a yield refuses to commit
+(`LifecycleStaleRevision`) instead of double-granting. Effects staged before a
+yield are discarded if the call is cancelled. See `docs/API.md` for the full
+semantics, schedulers, and the deterministic test harness helpers.
+
+### Live Studio Diagnostics
+
+Stream runtime diagnostics into the Studio plugin while play-testing:
+
+```lua
+Contracts.publishDiagnostics(runtime:diagnostics())
+```
+
+Batches are redacted (player objects become `{ userId, name }`), replicated
+through `ReplicatedStorage`, and rendered live in the plugin's Live
+Diagnostics panel with pause and clear controls. The publisher no-ops outside
+Studio.
 
 ## Core Concepts
 

@@ -7,5 +7,6 @@ local function load(primaryPath, fallbackPath)
 end
 
 return {
+	DiagnosticsBridge = load("./DiagnosticsBridge", "./Studio/DiagnosticsBridge"),
 	StudioReport = load("./StudioReport", "./Studio/StudioReport"),
 }

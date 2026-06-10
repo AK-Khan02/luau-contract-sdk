@@ -86,6 +86,28 @@ function ActionScope.system(self: any): any
 	return self._system
 end
 
+function ActionScope.cancelToken(self: any): any
+	return self._context.cancelToken
+end
+
+function ActionScope.cancelled(self: any): boolean
+	local token: any = self._context.cancelToken
+	if token == nil or type(token.isCancelled) ~= "function" then
+		return false
+	end
+	local isCancelledFn = token.isCancelled :: (any) -> any
+	return isCancelledFn(token) == true
+end
+
+function ActionScope.onCancel(self: any, callback: (any) -> ())
+	local token: any = self._context.cancelToken
+	if token == nil or type(token.onCancel) ~= "function" then
+		return
+	end
+	local onCancelFn = token.onCancel :: (any, (any) -> ()) -> ()
+	onCancelFn(token, callback)
+end
+
 function ActionScope._rememberEffect(self: any, kind: string, targetPath: string)
 	local status = kind == "read" and "observed" or "committed"
 	self._effectPlan:record(kind, targetPath, status)

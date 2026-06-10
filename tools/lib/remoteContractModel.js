@@ -38,6 +38,42 @@ function lifecyclePolicy(remote) {
 	return remote.lifecycle || {};
 }
 
+function asyncPolicyForRemote(contract, remote) {
+	const asyncPolicy = actionForRemote(contract, remote)?.async;
+	return asyncPolicy && typeof asyncPolicy === "object" ? asyncPolicy : null;
+}
+
+function asyncTimeoutSeconds(asyncPolicy) {
+	if (asyncPolicy == null || asyncPolicy.timeoutSeconds === false) {
+		return null;
+	}
+	return asyncPolicy.timeoutSeconds != null ? asyncPolicy.timeoutSeconds : 10;
+}
+
+function asyncConcurrency(asyncPolicy, remote) {
+	if (asyncPolicy.concurrency != null) {
+		return asyncPolicy.concurrency;
+	}
+	return lifecyclePolicy(remote).session != null ? "serialize" : "reject";
+}
+
+function asyncAttackCases(contract, remote) {
+	const asyncPolicy = asyncPolicyForRemote(contract, remote);
+	if (asyncPolicy == null) {
+		return [];
+	}
+
+	const lifecycle = lifecyclePolicy(remote);
+	const cases = [{ kind: "async", name: "in-flight duplicate" }];
+	if (asyncTimeoutSeconds(asyncPolicy) != null) {
+		cases.push({ kind: "async", name: "handler timeout" });
+	}
+	if (lifecycle.session != null && typeof lifecycle.revision === "string" && !lifecycle.revision.includes(".")) {
+		cases.push({ kind: "async", name: "stale revision after yield" });
+	}
+	return cases;
+}
+
 function payloadAttackCases(schema) {
 	if (schema == null) {
 		return [{ kind: "payload", name: "wrong payload type" }];
@@ -94,6 +130,7 @@ function attackCasesForRemote(contract, remote, attackConfig = {}) {
 	if (outputSchemaForRemote(contract, remote) != null) {
 		cases.push({ kind: "response", name: "bad response shape" });
 	}
+	cases.push(...asyncAttackCases(contract, remote));
 	return cases;
 }
 
@@ -233,6 +270,9 @@ function manifestForContract(contract, options = {}) {
 
 module.exports = {
 	actorPolicyForRemote,
+	asyncConcurrency,
+	asyncPolicyForRemote,
+	asyncTimeoutSeconds,
 	attackCasesForRemote,
 	contractModel,
 	manifestForContract,

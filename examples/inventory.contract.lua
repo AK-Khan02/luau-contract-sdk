@@ -37,5 +37,8 @@ return Contracts.system("InventoryService")
 		policy = {
 			actorRequired = true,
 		},
+		async = {
+			timeoutSeconds = 5,
+		},
 		tags = { "inventory" },
 	})

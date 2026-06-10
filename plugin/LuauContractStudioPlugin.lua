@@ -115,9 +115,14 @@ summaryPadding.PaddingBottom = UDim.new(0, 8)
 summaryPadding.PaddingLeft = UDim.new(0, 8)
 summaryPadding.Parent = summary
 
+local CONTENT_SIZE = UDim2.new(1, 0, 1, -152)
+local CONTENT_SIZE_WITH_LIVE = UDim2.new(1, 0, 1, -388)
+local LIVE_SECTION_HEIGHT = 228
+local LIVE_MAX_ROWS = 100
+
 local content = Instance.new("ScrollingFrame")
 content.Name = "Content"
-content.Size = UDim2.new(1, 0, 1, -152)
+content.Size = CONTENT_SIZE
 content.BackgroundColor3 = COLORS.panel
 content.BorderSizePixel = 0
 content.LayoutOrder = 3
@@ -263,6 +268,164 @@ local function scan()
 	render(report)
 	scanButton.Text = "Scan"
 end
+
+local liveSection = Instance.new("Frame")
+liveSection.Name = "LiveSection"
+liveSection.Size = UDim2.new(1, 0, 0, LIVE_SECTION_HEIGHT)
+liveSection.BackgroundColor3 = COLORS.panel
+liveSection.BorderSizePixel = 0
+liveSection.LayoutOrder = 4
+liveSection.Visible = false
+liveSection.Parent = root
+
+local liveHeader = Instance.new("Frame")
+liveHeader.Name = "LiveHeader"
+liveHeader.Size = UDim2.new(1, -16, 0, 34)
+liveHeader.Position = UDim2.new(0, 8, 0, 4)
+liveHeader.BackgroundTransparency = 1
+liveHeader.Parent = liveSection
+
+local liveTitle = makeLabel(liveHeader, "Live Diagnostics", 34, COLORS.text, true)
+liveTitle.Size = UDim2.new(1, -160, 1, 0)
+
+local function makeLiveButton(text, offset)
+	local liveButton = Instance.new("TextButton")
+	liveButton.AnchorPoint = Vector2.new(1, 0.5)
+	liveButton.Position = UDim2.new(1, offset, 0.5, 0)
+	liveButton.Size = UDim2.new(0, 64, 0, 26)
+	liveButton.BackgroundColor3 = COLORS.panelAlt
+	liveButton.BorderSizePixel = 0
+	liveButton.Font = Enum.Font.GothamBold
+	liveButton.TextSize = 12
+	liveButton.TextColor3 = COLORS.text
+	liveButton.Text = text
+	liveButton.Parent = liveHeader
+	return liveButton
+end
+
+local pauseButton = makeLiveButton("Pause", -72)
+local clearButton = makeLiveButton("Clear", 0)
+
+local liveList = Instance.new("ScrollingFrame")
+liveList.Name = "LiveList"
+liveList.Size = UDim2.new(1, -16, 1, -46)
+liveList.Position = UDim2.new(0, 8, 0, 40)
+liveList.BackgroundColor3 = COLORS.panelAlt
+liveList.BorderSizePixel = 0
+liveList.CanvasSize = UDim2.new()
+liveList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+liveList.ScrollBarThickness = 6
+liveList.Parent = liveSection
+
+local liveListLayout = Instance.new("UIListLayout")
+liveListLayout.FillDirection = Enum.FillDirection.Vertical
+liveListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+liveListLayout.Padding = UDim.new(0, 2)
+liveListLayout.Parent = liveList
+
+local liveListPadding = Instance.new("UIPadding")
+liveListPadding.PaddingTop = UDim.new(0, 6)
+liveListPadding.PaddingRight = UDim.new(0, 6)
+liveListPadding.PaddingBottom = UDim.new(0, 6)
+liveListPadding.PaddingLeft = UDim.new(0, 6)
+liveListPadding.Parent = liveList
+
+local liveState = {
+	rows = {},
+	paused = false,
+	seenSeq = {},
+	attachedFolder = nil,
+}
+
+local function renderLive()
+	clear(liveList)
+	if #liveState.rows == 0 then
+		makeLabel(liveList, "Waiting for diagnostics...", 20, COLORS.muted, false)
+		return
+	end
+
+	for index, row in ipairs(liveState.rows) do
+		local label = makeLabel(liveList, row.text, 20, toneColor(row.tone), false)
+		label.LayoutOrder = index
+		label.TextSize = 12
+	end
+
+	liveList.CanvasPosition = Vector2.new(0, math.max(0, liveList.AbsoluteCanvasSize.Y))
+end
+
+local function showLiveSection()
+	if not liveSection.Visible then
+		liveSection.Visible = true
+		content.Size = CONTENT_SIZE_WITH_LIVE
+		renderLive()
+	end
+end
+
+local function onBatchValue(child)
+	if liveState.paused then
+		return
+	end
+	if not child:IsA("StringValue") then
+		return
+	end
+
+	local ok, decoded = pcall(function()
+		return game:GetService("HttpService"):JSONDecode(child.Value)
+	end)
+	if not ok then
+		return
+	end
+
+	local batch = PluginModel.batchFromDecoded(decoded)
+	if batch == nil or liveState.seenSeq[batch.seq] then
+		return
+	end
+	liveState.seenSeq[batch.seq] = true
+
+	PluginModel.appendLive(liveState.rows, PluginModel.liveRows(batch), LIVE_MAX_ROWS)
+	renderLive()
+end
+
+local function attachLiveFolder(folder)
+	if liveState.attachedFolder == folder then
+		return
+	end
+	liveState.attachedFolder = folder
+	liveState.seenSeq = {}
+	showLiveSection()
+
+	for _, child in ipairs(folder:GetChildren()) do
+		onBatchValue(child)
+	end
+	folder.ChildAdded:Connect(onBatchValue)
+end
+
+local function watchForLiveFolder()
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local existing = replicatedStorage:FindFirstChild("__LuauContractDiagnostics")
+	if existing then
+		attachLiveFolder(existing)
+	end
+
+	replicatedStorage.ChildAdded:Connect(function(child)
+		if child.Name == "__LuauContractDiagnostics" then
+			attachLiveFolder(child)
+		end
+	end)
+end
+
+pauseButton.Activated:Connect(function()
+	liveState.paused = not liveState.paused
+	pauseButton.Text = liveState.paused and "Resume" or "Pause"
+	pauseButton.BackgroundColor3 = liveState.paused and COLORS.accent or COLORS.panelAlt
+end)
+
+clearButton.Activated:Connect(function()
+	liveState.rows = {}
+	renderLive()
+end)
+
+watchForLiveFolder()
 
 scanButton.Activated:Connect(scan)
 button.Click:Connect(function()

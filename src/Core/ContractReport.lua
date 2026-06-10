@@ -108,6 +108,7 @@ local function describeAction(action: any, preconditionFallback: {any}, postcond
 		lifecycle = describeLifecyclePolicy(action.lifecycle),
 		remote = describeRemoteBinding(action.remote),
 		policy = describePolicy(action.policy),
+		async = action.async ~= nil and copyMap(action.async) or nil,
 		tags = copyList(action.tags),
 	}
 end

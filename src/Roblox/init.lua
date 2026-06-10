@@ -12,4 +12,6 @@ return {
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),
+	StudioBridgePublisher = load("./StudioBridgePublisher", "./Roblox/StudioBridgePublisher"),
+	TaskScheduler = load("./TaskScheduler", "./Roblox/TaskScheduler"),
 }

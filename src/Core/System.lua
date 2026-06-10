@@ -142,6 +142,41 @@ local function normalizeLifecyclePolicy(definition: any): any
 	}
 end
 
+local ASYNC_CONCURRENCY_MODES: {[string]: boolean} = {
+	serialize = true,
+	reject = true,
+	allow = true,
+}
+
+local function normalizeAsyncPolicy(definition: any): any?
+	if definition == nil or definition == false then
+		return nil
+	end
+	if definition == true then
+		definition = {}
+	end
+	if type(definition) ~= "table" then
+		error("Action async policy must be true or a table", 3)
+	end
+
+	local concurrency = definition.concurrency
+	if concurrency ~= nil and ASYNC_CONCURRENCY_MODES[concurrency] ~= true then
+		error("Action async concurrency must be serialize, reject, or allow", 3)
+	end
+
+	local timeoutSeconds = definition.timeoutSeconds
+	if timeoutSeconds ~= nil and timeoutSeconds ~= false then
+		if type(timeoutSeconds) ~= "number" or timeoutSeconds <= 0 then
+			error("Action async timeoutSeconds must be a positive number or false", 3)
+		end
+	end
+
+	return {
+		concurrency = concurrency,
+		timeoutSeconds = timeoutSeconds,
+	}
+end
+
 local function normalizeRemoteBinding(actionName: string, remote: any): any?
 	if remote == nil then
 		return nil
@@ -398,6 +433,7 @@ local function buildAction(actionName: string, definition: any): any
 		}),
 		remote = normalizeRemoteBinding(actionName, definition.remote),
 		policy = normalizePolicy(definition.policy or definition.policies),
+		async = normalizeAsyncPolicy(definition.async),
 		tags = normalizeStringList("Action tag", definition.tags),
 	}
 end
@@ -419,6 +455,7 @@ local function describeAction(action: any, preconditionFallback: {any}, postcond
 		lifecycle = copyMap(action.lifecycle),
 		remote = copyMap(action.remote),
 		policy = copyMap(action.policy),
+		async = action.async ~= nil and copyMap(action.async) or nil,
 		tags = copyList(action.tags),
 	}
 end
@@ -1580,6 +1617,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 	local input = actionInput(options, context)
 	context.payload = input
 	context.input = input
+	context.cancelToken = options.cancelToken
 
 	local inputValidation = self:validateActionInput(actionName, input, diagnostics, context)
 	if not inputValidation.ok then
@@ -1674,6 +1712,38 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 			ok = false,
 			name = "ActionHandlerError",
 			reason = value,
+			context = context,
+			effects = scope:effects(),
+		}
+	end
+
+	local cancelToken: any = options.cancelToken
+	local tokenCancelled = false
+	if cancelToken ~= nil and type(cancelToken.isCancelled) == "function" then
+		local isCancelledFn = cancelToken.isCancelled :: (any) -> any
+		tokenCancelled = isCancelledFn(cancelToken) == true
+	end
+	if tokenCancelled then
+		local cancelReason = "cancelled"
+		if type(cancelToken.reason) == "function" then
+			local reasonFn = cancelToken.reason :: (any) -> any
+			cancelReason = tostring(reasonFn(cancelToken))
+		end
+		local message = self._name .. "." .. actionName .. " was cancelled (" .. cancelReason
+			.. "); staged effects were discarded"
+		recordViolation(diagnostics, {
+			level = "warn",
+			category = "action",
+			system = self._name,
+			name = "ActionCancelled",
+			message = message,
+			context = context,
+		})
+		return {
+			ok = false,
+			name = "ActionCancelled",
+			reason = message,
+			cancelReason = cancelReason,
 			context = context,
 			effects = scope:effects(),
 		}

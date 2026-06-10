@@ -28,6 +28,11 @@ export type DiagnosticRow = {
 	text: string,
 }
 
+export type LiveRow = {
+	text: string,
+	tone: string,
+}
+
 local PluginModel = {}
 
 local SCRIPT_CLASSES: {[string]: boolean} = {
@@ -138,6 +143,72 @@ function PluginModel.findingRows(report: any): {FindingRow}
 			message = tostring(finding.message or ""),
 			tone = PluginModel.findingTone(finding),
 		})
+	end
+	return rows
+end
+
+local LIVE_WIRE_VERSION = 1
+
+function PluginModel.batchFromDecoded(decoded: any): any
+	if type(decoded) ~= "table" then
+		return nil
+	end
+	if decoded.v ~= LIVE_WIRE_VERSION then
+		return nil
+	end
+	if type(decoded.entries) ~= "table" then
+		return nil
+	end
+	return decoded
+end
+
+function PluginModel.liveTone(entry: any): string
+	if entry.level == "error" then
+		return "error"
+	end
+	if entry.level == "warn" then
+		return "warn"
+	end
+	return "text"
+end
+
+function PluginModel.formatLiveEntry(entry: any): string
+	local parts = {}
+	table.insert(parts, "[" .. tostring(entry.level or "info") .. "]")
+	if entry.system ~= nil then
+		table.insert(parts, tostring(entry.system))
+	end
+	table.insert(parts, tostring(entry.name or entry.code or "Diagnostic"))
+	local prefix = table.concat(parts, " ")
+	if entry.message ~= nil then
+		return prefix .. ": " .. tostring(entry.message)
+	end
+	return prefix
+end
+
+function PluginModel.liveRows(batch: any, formatEntry: ((any) -> string)?): {LiveRow}
+	local rows: {LiveRow} = {}
+	if batch == nil then
+		return rows
+	end
+
+	local format = formatEntry or PluginModel.formatLiveEntry
+	for _, rawEntry in ipairs(batch.entries or {}) do
+		local entry: any = rawEntry
+		table.insert(rows, {
+			text = format(entry),
+			tone = PluginModel.liveTone(entry),
+		})
+	end
+	return rows
+end
+
+function PluginModel.appendLive(rows: {LiveRow}, newRows: {LiveRow}, maxRows: number): {LiveRow}
+	for _, row in ipairs(newRows) do
+		table.insert(rows, row)
+	end
+	while #rows > maxRows do
+		table.remove(rows, 1)
 	end
 	return rows
 end

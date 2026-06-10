@@ -8,6 +8,9 @@ const {
 } = require("./contractArtifacts");
 const {
 	actorPolicyForRemote,
+	asyncConcurrency,
+	asyncPolicyForRemote,
+	asyncTimeoutSeconds,
 	outputSchemaForRemote,
 	remoteAttackSummary,
 } = require("./remoteContractModel");
@@ -244,10 +247,16 @@ function sessionSetup(contract, remote) {
 	}
 
 	const states = lifecycleStates(action);
+	const revisionField = typeof remote.lifecycle?.revision === "string" && !remote.lifecycle.revision.includes(".")
+		? remote.lifecycle.revision
+		: null;
+	const revisionOptions = revisionField != null
+		? `, { revision = ${luaLiteral(validValue(remote.payload)[revisionField] ?? 0)} }`
+		: "";
 	return {
 		lines: [
 			"local sessions = {",
-			`\t[${quote(sessionName)}] = Contract:lifecycleSession(${luaLiteral(states, "\t")}),`,
+			`\t[${quote(sessionName)}] = Contract:lifecycleSession(${luaLiteral(states, "\t")}${revisionOptions}),`,
 			"}",
 		],
 		bindOptions: {
@@ -263,7 +272,7 @@ function bindOptionsLiteral(bindOptions) {
 	delete copy.sessions;
 	const literal = luaLiteral(copy);
 	if (sessions === "__sessions__") {
-		return literal.replace(/\n}$/, ",\n\tsessions = sessions,\n}");
+		return literal.replace(/\n}$/, "\n\tsessions = sessions,\n}");
 	}
 	return literal;
 }
@@ -293,10 +302,14 @@ function testRemoteBlock(contract, remote, attackConfig) {
 		lines.push(`\t${setupLine}`);
 	}
 
+	const harnessSchedulerLine = asyncPolicyForRemote(contract, remote) != null
+		? "\t\t\tscheduler = Contracts.Test.manualScheduler(),"
+		: null;
 	lines.push(
 		"\tlocal function newHarness(defaultResponsesOverride)",
 		"\t\tlocal harness = Contracts.Test.remoteHarness(Contract, {",
 		"\t\t\tdefaultResponses = defaultResponsesOverride or defaultResponses,",
+		...(harnessSchedulerLine ? [harnessSchedulerLine] : []),
 		"\t\t})",
 		`\t\tharness:implement(${quote(remote.actionName)})`,
 		`\t\tharness:bind(${quote(remote.remoteName)}, ${bindOptions})`,
@@ -359,6 +372,95 @@ function testRemoteBlock(contract, remote, attackConfig) {
 		lines.push("\t\tlocal rateLimitDiagnostic = harness:lastDiagnostic()");
 		lines.push(`\t\tcheck(${quote(`${contract.name}.${remote.remoteName} rate limits spam`)}, rateLimitDiagnostic ~= nil and rateLimitDiagnostic.name == "RemoteRateLimited")`);
 		lines.push("\tend");
+	}
+
+	const asyncPolicy = asyncPolicyForRemote(contract, remote);
+	if (asyncPolicy != null) {
+		const subject = `${contract.name}.${remote.remoteName}`;
+		const sessionName = remote.lifecycle && remote.lifecycle.session;
+		const states = lifecycleStates(action);
+		const concurrency = asyncConcurrency(asyncPolicy, remote);
+		const timeoutSeconds = asyncTimeoutSeconds(asyncPolicy);
+		const revisionField = typeof remote.lifecycle?.revision === "string" && !remote.lifecycle.revision.includes(".")
+			? remote.lifecycle.revision
+			: null;
+
+		const asyncHarnessLines = (sessionsVariable) => {
+			const harnessLines = [
+				"\t\tlocal scheduler = Contracts.Test.manualScheduler()",
+			];
+			if (sessionName) {
+				const revisionOptions = revisionField != null
+					? `, { revision = ${luaLiteral(validValue(remote.payload)[revisionField] ?? 0)} }`
+					: "";
+				harnessLines.push(`\t\tlocal ${sessionsVariable} = {`);
+				harnessLines.push(`\t\t\t[${quote(sessionName)}] = Contract:lifecycleSession(${luaLiteral(states, "\t\t\t")}${revisionOptions}),`);
+				harnessLines.push("\t\t}");
+			}
+			harnessLines.push(
+				"\t\tlocal harness = Contracts.Test.remoteHarness(Contract, {",
+				"\t\t\tdefaultResponses = defaultResponses,",
+				"\t\t\tscheduler = scheduler,",
+				"\t\t})",
+				`\t\tharness:implementYielding(${quote(remote.actionName)})`
+			);
+			if (sessionName) {
+				harnessLines.push(`\t\tharness:bind(${quote(remote.remoteName)}, { context = {}, sessions = ${sessionsVariable} })`);
+			} else {
+				harnessLines.push(`\t\tharness:bind(${quote(remote.remoteName)}, ${bindOptions.split("\n").join("\n\t\t")})`);
+			}
+			harnessLines.push("\t\tharness:clearDiagnostics()");
+			return harnessLines;
+		};
+
+		lines.push("");
+		lines.push("\tdo");
+		lines.push(...asyncHarnessLines("asyncSessions"));
+		lines.push(`\t\tlocal first = harness:callAsync(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t")})`);
+		lines.push(`\t\tlocal second = harness:callAsync(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t")})`);
+		lines.push(`\t\tcheck(${quote(`${subject} never interleaves in-flight duplicates`)}, harness:handlerCalls(${quote(remote.actionName)}) == 1)`);
+		if (concurrency === "reject") {
+			lines.push("\t\tlocal busyDiagnostic = harness:lastDiagnostic()");
+			lines.push(`\t\tcheck(${quote(`${subject} records ActionBusy for in-flight duplicate`)}, busyDiagnostic ~= nil and busyDiagnostic.name == "ActionBusy")`);
+		}
+		lines.push(`\t\twhile harness:pendingHandlerCount(${quote(remote.actionName)}) > 0 do`);
+		lines.push(`\t\t\tharness:resume(${quote(remote.actionName)})`);
+		lines.push("\t\tend");
+		lines.push(`\t\tcheck(${quote(`${subject} settles every duplicate call`)}, first.settled == true and second.settled == true)`);
+		lines.push("\tend");
+
+		if (timeoutSeconds != null) {
+			lines.push("");
+			lines.push("\tdo");
+			lines.push(...asyncHarnessLines("timeoutSessions"));
+			lines.push(`\t\tlocal pending = harness:callAsync(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t")})`);
+			lines.push(`\t\tcheck(${quote(`${subject} holds slow handler before deadline`)}, pending.settled == false)`);
+			lines.push(`\t\tscheduler.advance(${timeoutSeconds})`);
+			lines.push(`\t\tcheck(${quote(`${subject} times out stuck handler`)}, pending.settled == true)`);
+			lines.push(`\t\tcheck(${quote(`${subject} records ActionTimeout`)}, #harness:diagnostics():findByName("ActionTimeout") >= 1)`);
+			lines.push(`\t\twhile harness:pendingHandlerCount(${quote(remote.actionName)}) > 0 do`);
+			lines.push(`\t\t\tharness:resume(${quote(remote.actionName)})`);
+			lines.push("\t\tend");
+			lines.push(`\t\tcheck(${quote(`${subject} blocks commits after timeout`)}, #harness:diagnostics():findByName("ActionCancelled") >= 1)`);
+			lines.push("\tend");
+		}
+
+		if (sessionName && revisionField != null) {
+			lines.push("");
+			lines.push("\tdo");
+			lines.push(...asyncHarnessLines("staleSessions"));
+			lines.push(`\t\tlocal pending = harness:callAsync(${quote(remote.remoteName)}, validActor, ${luaLiteral(validPayload, "\t\t")})`);
+			lines.push(`\t\tcheck(${quote(`${subject} starts handler before revision moves`)}, harness:handlerCalls(${quote(remote.actionName)}) == 1)`);
+			lines.push(`\t\tlocal staleSession = staleSessions[${quote(sessionName)}]`);
+			lines.push("\t\tstaleSession:restore({");
+			lines.push("\t\t\trevision = staleSession:revision() + 1,");
+			lines.push("\t\t\tstates = staleSession:states(),");
+			lines.push("\t\t})");
+			lines.push(`\t\tharness:resume(${quote(remote.actionName)})`);
+			lines.push(`\t\tcheck(${quote(`${subject} settles after stale revision`)}, pending.settled == true)`);
+			lines.push(`\t\tcheck(${quote(`${subject} refuses stale revision after yield`)}, #harness:diagnostics():findByName("LifecycleStaleRevision") >= 1)`);
+			lines.push("\tend");
+		}
 	}
 
 	if (badResponse != null) {

@@ -1,7 +1,9 @@
 --!strict
 
+local AsyncGate = require("./AsyncGate")
 local Diagnostics = require("./Diagnostics")
 local RemoteGuard = require("../Roblox/RemoteGuard")
+local TaskScheduler = require("../Roblox/TaskScheduler")
 
 export type Request = {
 	actor: any?,
@@ -22,6 +24,7 @@ export type Config = {
 	diagnostics: any?,
 	sessions: any?,
 	lifecycleSessions: any?,
+	scheduler: any?,
 }
 
 local Runtime: any = {}
@@ -105,6 +108,8 @@ function Runtime.new(systemContract: any, config: Config?): any
 		_sessions = {},
 		_connections = {},
 		_boundRemotes = {},
+		_scheduler = options.scheduler,
+		_asyncGate = nil,
 		_destroyed = false,
 	}, Runtime)
 
@@ -127,6 +132,30 @@ end
 
 function Runtime.diagnostics(self: any): any
 	return self._diagnostics
+end
+
+function Runtime._gate(self: any): any
+	if self._asyncGate ~= nil then
+		return self._asyncGate
+	end
+
+	local scheduler = self._scheduler or TaskScheduler.default()
+	if scheduler == nil then
+		error("Runtime needs a scheduler for async actions; pass config.scheduler", 3)
+	end
+
+	self._asyncGate = AsyncGate.new({
+		scheduler = scheduler,
+	})
+	return self._asyncGate
+end
+
+function Runtime._asyncPolicy(self: any, actionName: string): any
+	local actionOptions = self._system:actionOptions(actionName)
+	if actionOptions == nil then
+		return nil
+	end
+	return actionOptions.async
 end
 
 function Runtime.session(self: any, name: string, resolverOrSession: any): any
@@ -276,18 +305,44 @@ function Runtime.invoke(self: any, actionName: string, request: Request?): any
 		return failure
 	end
 
-	return self._system:runAction(actionName, {
-		actor = runtimeRequest.actor,
-		payload = runtimeRequest.payload,
-		context = runtimeRequest.context,
-		diagnostics = runtimeRequest.diagnostics,
-		session = session,
-		states = runtimeRequest.states,
-		expectedRevision = runtimeRequest.expectedRevision,
+	local function execute(cancelToken: any): any
+		return self._system:runAction(actionName, {
+			actor = runtimeRequest.actor,
+			payload = runtimeRequest.payload,
+			context = runtimeRequest.context,
+			diagnostics = runtimeRequest.diagnostics,
+			session = session,
+			states = runtimeRequest.states,
+			expectedRevision = runtimeRequest.expectedRevision,
+			remote = runtimeRequest.remote,
+			cancelToken = cancelToken,
+		}, function(scope)
+			return actionHandler(scope, runtimeRequest)
+		end)
+	end
+
+	local asyncPolicy = self:_asyncPolicy(actionName)
+	if asyncPolicy == nil then
+		return execute(nil)
+	end
+
+	local gate = self:_gate()
+	local key = session
+	if key == nil then
+		key = runtimeRequest.actor
+	end
+	if key == nil then
+		key = actionName
+	end
+
+	return gate:run(key, {
+		concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
+		timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
+		system = self._system:name(),
+		action = actionName,
 		remote = runtimeRequest.remote,
-	}, function(scope)
-		return actionHandler(scope, runtimeRequest)
-	end)
+		diagnostics = runtimeRequest.diagnostics,
+	}, execute)
 end
 
 function Runtime._remoteRequest(self: any, remoteName: string, bindOptions: any, player: any, payload: any): any
@@ -397,7 +452,16 @@ function Runtime.bindRemote(self: any, remoteName: string, remoteObject: any, op
 	end
 
 	local handler = self:_remoteHandler(remoteName, bindOptions)
-	local connection = RemoteGuard.connect(self._system, remoteName, remoteObject, handler, self:_remoteGuardOptions(bindOptions))
+	local guardOptions: any = self:_remoteGuardOptions(bindOptions)
+
+	local remoteOptions: any = self._system:remoteOptions(remoteName)
+	local remoteAction: any = remoteOptions and remoteOptions.action
+	if remoteAction ~= nil and self:_asyncPolicy(remoteAction) ~= nil then
+		guardOptions.asyncGate = self:_gate()
+	end
+
+	local guardHandler: any = handler
+	local connection = RemoteGuard.connect(self._system, remoteName, remoteObject, guardHandler, guardOptions)
 
 	self._connections[remoteName] = connection
 	self._boundRemotes[remoteName] = true
@@ -435,6 +499,12 @@ function Runtime.destroy(self: any): any
 
 	for _, connection in pairs(self._connections) do
 		disconnect(connection)
+	end
+
+	if self._asyncGate ~= nil then
+		local gate: any = self._asyncGate
+		gate:destroy()
+		self._asyncGate = nil
 	end
 
 	self._connections = {}

@@ -177,6 +177,75 @@ The action scope passed to the handler exposes:
 - `scope:stageTouch(path, commitOrEffect)`
 - `scope:effects()`
 
+## Async Actions
+
+Actions that yield (DataStore writes, MessagingService, HTTP) declare `async`
+so the contract guarantees survive the yield:
+
+```lua
+:action("GrantItem", {
+	input = GrantItemSchema,
+	writes = { "PlayerData/Inventory" },
+	async = {
+		timeoutSeconds = 10, -- default 10; false disables the deadline
+		concurrency = "serialize", -- "serialize" | "reject" | "allow"
+	},
+})
+```
+
+Async actions run through an `AsyncGate` keyed by lifecycle session (falling
+back to the actor, then the action name):
+
+- `serialize` (default when the remote binds a lifecycle session) queues
+  duplicate in-flight calls so commits never interleave.
+- `reject` (default otherwise) fails duplicates immediately with a named
+  `ActionBusy` diagnostic.
+- `allow` opts out for genuinely commutative actions.
+
+Timeouts cancel the call with an `ActionTimeout` diagnostic and a structured
+failure; the abandoned handler keeps running but its staged effects are
+discarded at the commit boundary with an `ActionCancelled` diagnostic. After a
+handler resumes from a yield, the lifecycle session revision is re-checked
+before effects apply, so a session that moved during the yield produces
+`LifecycleStaleRevision` and a rollback instead of a double commit.
+
+Handlers observe cancellation through the scope:
+
+```lua
+runtime:implement("GrantItem", function(scope)
+	scope:onCancel(function(reason)
+		print("cancelled:", reason)
+	end)
+
+	scope:stageWrite("PlayerData/Inventory", {
+		commit = grantItem,
+		rollback = revokeItem,
+	})
+
+	store:UpdateAsync(key, update) -- yields are safe here
+
+	if scope:cancelled() then
+		return nil -- staged effects are discarded either way
+	end
+	return { granted = true }
+end)
+```
+
+Schedulers drive timeouts and queueing. The Roblox adapter resolves the `task`
+library automatically; outside Roblox pass one explicitly:
+
+```lua
+local runtime = Contracts.runtime(Contract, {
+	scheduler = Contracts.Test.manualScheduler(), -- deterministic, for tests
+})
+
+scheduler.advance(10) -- fire pending timeouts in tests
+```
+
+`Contracts.Test.remoteHarness` accepts the same `scheduler` option and adds
+`implementYielding`, `callAsync`, `resume`, `pendingHandlerCount`, and
+`advance` for deterministic async tests.
+
 ## Transactional Effect Plans
 
 Immediate scope helpers such as `scope:write(...)` still run the given function
@@ -803,6 +872,29 @@ Records include:
 
 Reports include counts by level, system, name, and category.
 
+## Live Studio Diagnostics
+
+One server-side line streams runtime diagnostics into the Studio plugin while
+play-testing:
+
+```lua
+Contracts.publishDiagnostics(runtime:diagnostics(), {
+	level = "warn", -- minimum level to stream (default "warn")
+})
+```
+
+The publisher no-ops outside Studio (pass `force = true` to override), batches
+entries on Heartbeat, redacts player objects in contexts down to
+`{ userId, name }`, and writes versioned JSON batches as `StringValue`
+instances under `ReplicatedStorage.__LuauContractDiagnostics`. The plugin's
+Live Diagnostics panel picks them up automatically with pause and clear
+controls.
+
+The pure encoding/batching layer is `Contracts.Studio.DiagnosticsBridge` and
+the Roblox writer is `Contracts.Roblox.StudioBridgePublisher`; both accept
+`maxBatchEntries`, `flushIntervalSeconds`, `maxContextDepth`, and `clock`
+overrides.
+
 ## Overlay Feed
 
 ```lua
@@ -902,6 +994,12 @@ missing fields, wrong types, extra fields, pathological long strings, deep
 tables, large arrays, and non-finite numbers. They also cover missing or
 configured unauthorized actors, stale lifecycle revisions, rate-limit spam, and
 bad handler return shapes when those policies are present.
+
+For actions declared `async`, suites also generate in-flight duplicate calls
+(asserting handlers never interleave and `reject` policies record
+`ActionBusy`), handler timeouts (asserting `ActionTimeout` plus the
+commit-blocking `ActionCancelled`), and stale-revision-after-yield cases for
+remotes with lifecycle sessions (asserting `LifecycleStaleRevision`).
 
 Use `--attack-config` to provide invalid actor fixtures for named actor policies:
 

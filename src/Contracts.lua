@@ -1,3 +1,4 @@
+local AsyncGate = require("./Core/AsyncGate")
 local Diagnostics = require("./Core/Diagnostics")
 local DiagnosticReport = require("./Core/DiagnosticReport")
 local EffectPlan = require("./Core/EffectPlan")
@@ -17,6 +18,7 @@ local System = require("./Core/System")
 local Test = require("./Test")
 
 local Contracts = {
+	AsyncGate = AsyncGate,
 	Diagnostics = Diagnostics,
 	DiagnosticReport = DiagnosticReport,
 	EffectPlan = EffectPlan,
@@ -59,6 +61,10 @@ end
 
 function Contracts.guardRemote(remote, options, handler)
 	return Roblox.GuardRemote.connect(remote, options, handler)
+end
+
+function Contracts.publishDiagnostics(diagnostics, options)
+	return Roblox.StudioBridgePublisher.publish(diagnostics, options)
 end
 
 Contracts.any = Schema.any
