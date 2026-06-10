@@ -8,6 +8,7 @@ Supported local validation:
 
 ```sh
 luau tests/run.lua
+luau tests/run.lua -a <suite-filter> # run matching suites only, e.g. -a async
 node --test tools/tests/*.test.js
 node tools/luau-contract.js scan --fail-on error
 luau-analyze src/**/*.lua examples/**/*.lua tests/**/*.lua plugin/*.lua
