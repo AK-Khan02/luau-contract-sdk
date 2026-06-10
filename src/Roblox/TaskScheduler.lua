@@ -7,15 +7,14 @@ local function resolveTaskLibrary()
 	local ok, taskLib = pcall(function()
 		return task
 	end)
-	if ok and type(taskLib) == "table" and type(taskLib.spawn) == "function" and type(taskLib.delay) == "function" then
+	if ok then
 		return taskLib
 	end
 	return nil
 end
 
-function TaskScheduler.default()
-	local taskLib = resolveTaskLibrary()
-	if taskLib == nil then
+function TaskScheduler.from(taskLib)
+	if type(taskLib) ~= "table" or type(taskLib.spawn) ~= "function" or type(taskLib.delay) ~= "function" then
 		return nil
 	end
 
@@ -35,6 +34,10 @@ function TaskScheduler.default()
 			return os.clock()
 		end,
 	}
+end
+
+function TaskScheduler.default()
+	return TaskScheduler.from(resolveTaskLibrary())
 end
 
 return TaskScheduler
