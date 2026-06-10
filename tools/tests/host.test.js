@@ -186,7 +186,15 @@ end)
 	assert.equal(firstRun.status, 1, firstRun.stderr || firstRun.stdout);
 	const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
 	assert.equal(report.summary.scannerFindingCount, 1);
-	assert.equal(report.scanner.findings[0].path, "ServerScriptService.Unsafe");
+	const finding = report.scanner.findings[0];
+	assert.equal(finding.path, "ServerScriptService.Unsafe");
+	assert.equal(finding.ruleId, "raw-remote-handler");
+	assert.equal(finding.severity, "error");
+	assert.equal(typeof finding.line, "number");
+	assert.equal(finding.line > 0, true);
+	assert.match(finding.message, /RemoteGuard\.connect/);
+	assert.match(finding.snippet, /OnServerEvent/);
+	assert.equal(report.policy.exitCode, 1);
 
 	const secondRun = spawnSync(process.execPath, [
 		cliPath,
@@ -632,6 +640,57 @@ test("cli generates runnable remote attack tests", () => {
 	} finally {
 		fs.rmSync(outDir, { force: true, recursive: true });
 	}
+});
+
+test("cli rejects unknown commands with a non-zero exit", () => {
+	const run = spawnSync(process.execPath, [cliPath, "frobnicate"], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.notEqual(run.status, 0);
+	assert.match(run.stderr || run.stdout, /Unknown command: frobnicate/);
+});
+
+test("cli generate fails when the contract module glob matches nothing", () => {
+	const run = spawnSync(process.execPath, [
+		cliPath,
+		"generate",
+		"tests",
+		"--root",
+		repoRoot,
+		"--contract-module",
+		"definitely/missing/*.contract.lua",
+		"--out",
+		path.join(os.tmpdir(), "luau-contract-missing-out"),
+	], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.notEqual(run.status, 0);
+	assert.match(run.stderr || run.stdout, /no contract modules matched: definitely\/missing/);
+});
+
+test("cli generate fails on contracts that do not load", () => {
+	const projectRoot = makeTempProject();
+	fs.writeFileSync(path.join(projectRoot, "src", "broken.contract.lua"), "local x = (\n");
+
+	const run = spawnSync(process.execPath, [
+		cliPath,
+		"generate",
+		"tests",
+		"--root",
+		projectRoot,
+		"--contract-module",
+		"src/broken.contract.lua",
+		"--out",
+		path.join(projectRoot, "generated"),
+	], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.notEqual(run.status, 0);
+	assert.match(run.stderr || run.stdout, /cannot generate from contracts with exact load errors/);
+	assert.match(run.stderr || run.stdout, /broken\.contract/);
 });
 
 test("remote attack generator emits async cases for session contracts", () => {
