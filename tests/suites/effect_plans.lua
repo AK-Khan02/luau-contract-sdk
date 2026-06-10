@@ -321,4 +321,76 @@ return function(test)
 	check("stale lifecycle apply rolls back committed staged effects", staleResult.ok == false and staleResult.name == "LifecycleStaleRevision" and staleInventory.Coin ~= true)
 	check("stale lifecycle rollback runs in result", staleRollbackLog[1] == "commit" and staleRollbackLog[2] == "rollback")
 	check("stale lifecycle reports rolled back effect", staleResult.effects[1].status == "rolledBack" and staleResult.rollback.rolledBack == 1)
+	test:section("EffectPlan failure paths")
+
+	local EffectPlan = Contracts.EffectPlan
+
+	local orderedLog = {}
+	local manyPlan = EffectPlan.new()
+	for index = 1, 5 do
+		local label = "E" .. index
+		manyPlan:stage("write", "Data/" .. label, {
+			commit = function()
+				if index == 5 then
+					error("commit five exploded")
+				end
+				table.insert(orderedLog, "commit " .. label)
+			end,
+			rollback = function()
+				table.insert(orderedLog, "rollback " .. label)
+			end,
+		})
+	end
+
+	local manyDiagnostics = Contracts.diagnostics()
+	local manyResult = manyPlan:commit({}, manyDiagnostics)
+	check("fifth commit failure reports four commits", manyResult.ok == false
+		and manyResult.name == "ActionCommitFailed" and manyResult.committed == 4)
+	test:expectMatch("commit failure carries the thrown error", manyResult.reason, "commit five exploded")
+	check("all four prior effects roll back", manyResult.rollback.rolledBack == 4 and manyResult.rollback.ok == true)
+	check("rollbacks run in reverse order", orderedLog[5] == "rollback E4" and orderedLog[6] == "rollback E3"
+		and orderedLog[7] == "rollback E2" and orderedLog[8] == "rollback E1")
+	check("failed effect keeps failed status", manyResult.effects[5].status == "failed")
+	check("rolled back effects report their status", manyResult.effects[1].status == "rolledBack"
+		and manyResult.effects[4].status == "rolledBack")
+
+	local brokenRollbackPlan = EffectPlan.new()
+	brokenRollbackPlan:stage("write", "Data/Fragile", {
+		commit = function() end,
+		rollback = function()
+			error("rollback exploded")
+		end,
+	})
+	brokenRollbackPlan:stage("write", "Data/Bomb", {
+		commit = function()
+			error("second commit fails")
+		end,
+	})
+
+	local brokenDiagnostics = Contracts.diagnostics()
+	local brokenResult = brokenRollbackPlan:commit({}, brokenDiagnostics)
+	check("rollback failure surfaces in the commit result", brokenResult.ok == false
+		and brokenResult.rollback.ok == false and brokenResult.rollback.name == "EffectPlanRollbackFailed")
+	check("rollback failure names the failing effect", brokenResult.rollback.failures[1].name == "ActionRollbackFailed")
+	test:expectMatch("rollback failure carries the thrown error",
+		brokenResult.rollback.failures[1].reason, "rollback exploded")
+	check("rollback failure marks the effect status", brokenResult.rollback.failures[1].effect.status == "rollbackFailed")
+	check("rollback failure records a diagnostic", #brokenDiagnostics:findByName("ActionRollbackFailed") == 1)
+
+	local noRollbackPlan = EffectPlan.new()
+	noRollbackPlan:stage("write", "Data/OneWay", function() end)
+	noRollbackPlan:stage("write", "Data/Bomb", {
+		commit = function()
+			error("boom")
+		end,
+	})
+
+	local noRollbackDiagnostics = Contracts.diagnostics()
+	local noRollbackResult = noRollbackPlan:commit({}, noRollbackDiagnostics)
+	check("missing rollback is reported as unavailable",
+		noRollbackResult.rollback.failures[1].name == "ActionRollbackUnavailable")
+	test:expectMatch("unavailable rollback names the target",
+		noRollbackResult.rollback.failures[1].reason, "effect rollback unavailable for Data/OneWay")
+	check("unavailable rollback records a diagnostic",
+		#noRollbackDiagnostics:findByName("ActionRollbackUnavailable") == 1)
 end

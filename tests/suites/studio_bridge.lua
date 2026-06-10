@@ -3,6 +3,7 @@
 local Contracts = require("../../src/Contracts")
 local DiagnosticsBridge = require("../../src/Studio/DiagnosticsBridge")
 local StudioBridgePublisher = require("../../src/Roblox/StudioBridgePublisher")
+local TaskScheduler = require("../../src/Roblox/TaskScheduler")
 local PluginModel = require("../../plugin/LuauContractPluginModel")
 
 local function manualClock(start)
@@ -297,4 +298,118 @@ return function(test)
 	local accumulated = {}
 	PluginModel.appendLive(accumulated, rows, 2)
 	check("appendLive trims to max rows", #accumulated == 2 and accumulated[2].text == rows[3].text)
+	test:section("TaskScheduler resolution")
+
+	test:expect("default returns nil outside Roblox", TaskScheduler.default(), nil)
+	test:expect("from rejects nil libraries", TaskScheduler.from(nil), nil)
+	test:expect("from rejects partial libraries missing delay", TaskScheduler.from({
+		spawn = function() end,
+	}), nil)
+	test:expect("from rejects partial libraries missing spawn", TaskScheduler.from({
+		delay = function() end,
+	}), nil)
+
+	local spawned = {}
+	local delayed = {}
+	local cancelled = {}
+	local fakeTask = {
+		spawn = function(fn, ...)
+			table.insert(spawned, fn)
+			return fn
+		end,
+		delay = function(seconds, callback)
+			local thread = { seconds = seconds, callback = callback }
+			table.insert(delayed, thread)
+			return thread
+		end,
+		cancel = function(thread)
+			table.insert(cancelled, thread)
+		end,
+	}
+
+	local taskScheduler = TaskScheduler.from(fakeTask)
+	check("from wraps a complete task library", taskScheduler ~= nil
+		and type(taskScheduler.spawn) == "function"
+		and type(taskScheduler.delay) == "function"
+		and type(taskScheduler.clock) == "function")
+
+	taskScheduler.spawn(function() end)
+	test:expect("scheduler spawn delegates to task.spawn", #spawned, 1)
+
+	local cancelDelay = taskScheduler.delay(2, function() end)
+	test:expect("scheduler delay delegates to task.delay", delayed[1].seconds, 2)
+	cancelDelay()
+	test:expect("delay cancellation calls task.cancel", cancelled[1], delayed[1])
+
+	local noCancelScheduler = TaskScheduler.from({
+		spawn = fakeTask.spawn,
+		delay = fakeTask.delay,
+	})
+	local okWithoutCancel = pcall(noCancelScheduler.delay(1, function() end))
+	check("missing task.cancel is tolerated", okWithoutCancel == true)
+
+	test:section("StudioBridgePublisher edges")
+
+	local edgeDiagnostics = Contracts.diagnostics()
+
+	test:expectError("forced publish without a parent errors clearly", "needs a parent container", function()
+		StudioBridgePublisher.publish(edgeDiagnostics, {
+			runService = fakeRunService(false),
+			force = true,
+		})
+	end)
+
+	test:expectError("publishing outside Roblox without a factory errors clearly", "options.createInstance", function()
+		StudioBridgePublisher.publish(edgeDiagnostics, {
+			runService = fakeRunService(true),
+			parent = fakeContainer(),
+		})
+	end)
+
+	local reuseContainer = fakeContainer()
+	local reuseCreated = {}
+	local function reuseFactory(className)
+		local instance = fakeValue(className)
+		table.insert(reuseCreated, instance)
+		return instance
+	end
+
+	local firstHandle = StudioBridgePublisher.publish(edgeDiagnostics, {
+		runService = fakeRunService(true),
+		parent = reuseContainer,
+		createInstance = reuseFactory,
+	})
+	table.insert(reuseContainer._children, firstHandle.folder)
+	local secondHandle = StudioBridgePublisher.publish(edgeDiagnostics, {
+		runService = fakeRunService(true),
+		parent = reuseContainer,
+		createInstance = reuseFactory,
+	})
+	check("second publish reuses the existing folder", secondHandle.folder == firstHandle.folder)
+	local folderCount = 0
+	for _, instance in ipairs(reuseCreated) do
+		if instance.ClassName == "Folder" then
+			folderCount += 1
+		end
+	end
+	test:expect("only one diagnostics folder is created", folderCount, 1)
+	firstHandle.destroy()
+	secondHandle.destroy()
+
+	test:section("PluginModel malformed batches")
+
+	local mixedRows = PluginModel.liveRows({
+		v = 1,
+		seq = 1,
+		entries = {
+			{ level = "error", name = "Real" },
+			42,
+			"junk",
+			{ level = "warn", name = "AlsoReal" },
+		},
+	})
+	test:expect("liveRows skips non-table entries", #mixedRows, 2)
+	check("liveRows keeps the valid entries", mixedRows[1].tone == "error" and mixedRows[2].tone == "warn")
+	test:expect("liveRows of nil batch is empty", #PluginModel.liveRows(nil), 0)
+	test:expect("formatLiveEntry tolerates empty entries", PluginModel.formatLiveEntry({}), "[info] Diagnostic")
 end
