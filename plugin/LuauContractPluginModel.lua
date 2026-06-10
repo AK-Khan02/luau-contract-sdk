@@ -194,11 +194,13 @@ function PluginModel.liveRows(batch: any, formatEntry: ((any) -> string)?): {Liv
 
 	local format = formatEntry or PluginModel.formatLiveEntry
 	for _, rawEntry in ipairs(batch.entries or {}) do
-		local entry: any = rawEntry
-		table.insert(rows, {
-			text = format(entry),
-			tone = PluginModel.liveTone(entry),
-		})
+		if type(rawEntry) == "table" then
+			local entry: any = rawEntry
+			table.insert(rows, {
+				text = format(entry),
+				tone = PluginModel.liveTone(entry),
+			})
+		end
 	end
 	return rows
 end
