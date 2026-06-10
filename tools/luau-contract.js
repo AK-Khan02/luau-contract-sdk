@@ -337,6 +337,10 @@ async function runScan(options) {
 
 function exactContractsReport(projectRoot, projectConfig, discoveryConfig, options) {
 	const contractFiles = discoverContractFiles(projectRoot, discoveryConfig, discoveryConfig.contractModules);
+	if (contractFiles.length === 0 && discoveryConfig.contractModules.length > 0) {
+		const patterns = discoveryConfig.contractModules.join(", ");
+		throw new Error(`no contract modules matched: ${patterns}`);
+	}
 	const report = runLuauReport({
 		sdkRoot: SDK_ROOT,
 		projectRoot,
