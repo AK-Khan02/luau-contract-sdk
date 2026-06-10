@@ -89,7 +89,13 @@ return function(test)
 		})
 	local quickRemoteOptions = quickRemoteContract:remoteOptions("GrantItem")
 	check("remote table form validates input", quickRemoteContract:validateRemote("GrantItem", { ItemId = "Rifle" }).ok == true)
-	check("remote table form stores output as response", quickRemoteOptions.response ~= nil)
+	check("remote table form stores output as response", quickRemoteOptions.response ~= nil
+		and quickRemoteOptions.response.kind == "object"
+		and quickRemoteOptions.response.shape.granted ~= nil
+		and quickRemoteOptions.response.shape.itemId ~= nil
+		and quickRemoteOptions.response.allowExtra == false)
+	check("remote response schema rejects malformed responses",
+		Contracts.validate(quickRemoteOptions.response, { granted = "yes", itemId = "Rifle" }).ok == false)
 	check("remote table form stores actor policy", quickRemoteOptions.actor == "required")
 
 	local diagnostics = Contracts.diagnostics()
@@ -125,6 +131,7 @@ return function(test)
 	check("action runner reduces lifecycle", result.lifecycle.states.Inventory == "Ready" and #result.lifecycle.transitions == 1)
 	check("action runner avoids diagnostics on success", diagnostics:count() == 0)
 
+	local invalidInventory = {}
 	local invalidInputDiagnostics = Contracts.diagnostics()
 	local handlerRan = false
 	local invalidInput = grantContract:runAction("GrantItem", {
@@ -137,15 +144,17 @@ return function(test)
 		},
 		context = {
 			profileLoaded = true,
-			inventory = inventory,
+			inventory = invalidInventory,
 		},
 		diagnostics = invalidInputDiagnostics,
 	}, function()
 		handlerRan = true
 	end)
+	check("rejected input leaves the inventory untouched", next(invalidInventory) == nil)
 	check("action runner rejects invalid input", invalidInput.ok == false and handlerRan == false)
 	check("action runner records invalid input", invalidInputDiagnostics:last().name == "ActionInputInvalid")
 
+	local preconditionInventory = {}
 	local preconditionDiagnostics = Contracts.diagnostics()
 	local failedPrecondition = grantContract:runAction("GrantItem", {
 		actor = "PlayerA",
@@ -157,7 +166,7 @@ return function(test)
 		},
 		context = {
 			profileLoaded = false,
-			inventory = inventory,
+			inventory = preconditionInventory,
 		},
 		diagnostics = preconditionDiagnostics,
 	}, function()
@@ -166,9 +175,11 @@ return function(test)
 			itemId = "Sword",
 		}
 	end)
+	check("failed precondition leaves the inventory untouched", next(preconditionInventory) == nil)
 	check("action runner rejects failed precondition", failedPrecondition.ok == false)
 	check("action runner records named precondition", preconditionDiagnostics:last().name == "ProfileLoaded")
 
+	local writeInventory = {}
 	local writeDiagnostics = Contracts.diagnostics()
 	local badWrite = grantContract:runAction("GrantItem", {
 		actor = "PlayerA",
@@ -180,7 +191,7 @@ return function(test)
 		},
 		context = {
 			profileLoaded = true,
-			inventory = inventory,
+			inventory = writeInventory,
 		},
 		diagnostics = writeDiagnostics,
 	}, function(scope)
@@ -191,9 +202,13 @@ return function(test)
 			}
 		end)
 	end)
+	check("rejected write leaves the inventory untouched", next(writeInventory) == nil)
 	check("action scope rejects undeclared write", badWrite.ok == false and badWrite.name == "WriteNotAllowed")
+	test:expectMatch("undeclared write diagnostic names the path",
+		writeDiagnostics:last().message, "InventoryService.GrantItem may not write Player.Profile")
 	check("action scope records undeclared write", writeDiagnostics:last().name == "WriteNotAllowed")
 
+	local forbiddenInventory = {}
 	local forbiddenDiagnostics = Contracts.diagnostics()
 	local forbiddenTouch = grantContract:runAction("GrantItem", {
 		actor = "PlayerA",
@@ -205,7 +220,7 @@ return function(test)
 		},
 		context = {
 			profileLoaded = true,
-			inventory = inventory,
+			inventory = forbiddenInventory,
 		},
 		diagnostics = forbiddenDiagnostics,
 	}, function(scope)
@@ -216,9 +231,11 @@ return function(test)
 			}
 		end)
 	end)
+	check("forbidden touch leaves the inventory untouched", next(forbiddenInventory) == nil)
 	check("action scope rejects forbidden touch", forbiddenTouch.ok == false and forbiddenTouch.name == "ForbiddenTouch")
 	check("action scope records forbidden touch", forbiddenDiagnostics:last().name == "ForbiddenTouch")
 
+	local outputInventory = {}
 	local outputDiagnostics = Contracts.diagnostics()
 	local invalidOutput = grantContract:runAction("GrantItem", {
 		actor = "PlayerA",
@@ -230,7 +247,7 @@ return function(test)
 		},
 		context = {
 			profileLoaded = true,
-			inventory = inventory,
+			inventory = outputInventory,
 		},
 		diagnostics = outputDiagnostics,
 	}, function()

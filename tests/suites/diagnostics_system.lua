@@ -34,7 +34,15 @@ return function(test)
 	check("diagnostic report counts records", diagnosticReport.total == 2 and diagnosticReport.dropped == 1)
 	check("diagnostic report counts systems", diagnosticReport.counts.bySystem.Beta == 2)
 	check("diagnostic report limits recent records", #diagnosticReport.recent == 1 and diagnosticReport.recent[1].name == "C")
-	check("diagnostic report formats text", string.find(diagnostics:formatReport({ recentLimit = 1 }), "diagnostics:", 1, true) ~= nil)
+	local formatted = diagnostics:formatReport({ recentLimit = 1 })
+	local formattedLines = {}
+	for line in string.gmatch(formatted, "[^\n]+") do
+		table.insert(formattedLines, line)
+	end
+	check("diagnostic report header carries totals",
+		formattedLines[1] == "diagnostics: total=2 dropped=1 failures=true")
+	check("diagnostic report lists the recent entry",
+		#formattedLines == 2 and formattedLines[2] == "[error] C system=Beta category=remote third")
 
 	local subscriberDiagnostics = Contracts.diagnostics()
 	local observed = {}

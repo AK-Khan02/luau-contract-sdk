@@ -170,6 +170,13 @@ return function(test)
 
 	check("runtime invokes action through system runner", directResult.ok == true and directResult.value.itemId == "Rifle")
 	check("runtime handler receives normalized request", seenRequest.action == "GrantItem" and seenRequest.actor == admin)
+	check("normalized request carries the payload", seenRequest.payload ~= nil
+		and seenRequest.payload.ItemId == "Rifle" and seenRequest.payload.Revision == 0)
+	check("normalized request carries caller context", seenRequest.context ~= nil
+		and seenRequest.context.inventory == inventory)
+	check("normalized request resolves the revision field path", seenRequest.expectedRevision == 0)
+	check("normalized request keeps the session name", seenRequest.sessionName == "inventory")
+	check("normalized request defaults to runtime diagnostics", seenRequest.diagnostics == runtime:diagnostics())
 	check("runtime resolves named lifecycle session", sessions.Admin:revision() == 1)
 	check("runtime action records scoped effects", #directResult.effects == 2 and directResult.effects[2].kind == "write")
 

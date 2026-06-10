@@ -126,8 +126,11 @@ return function(test)
 	check("timed call waits before deadline", timeoutResult == nil)
 	gateSched.advance(3)
 	check("gate times out stuck calls", timeoutResult ~= nil and timeoutResult.name == "ActionTimeout")
+	test:expectMatch("timeout failure names the action and deadline", timeoutResult.reason, "GrantItem timed out after 3 seconds")
 	check("timeout cancels the token", timeoutToken ~= nil and timeoutToken:isCancelled() and timeoutToken:reason() == "timeout")
 	check("timeout records a diagnostic", #timeoutDiag:findByName("ActionTimeout") == 1)
+	test:expectMatch("timeout diagnostic message names the action and deadline",
+		timeoutDiag:findByName("ActionTimeout")[1].message, "GrantItem timed out after 3 seconds")
 
 	gateSched.spawn(threads.slow)
 	check("late completion after timeout is discarded", timeoutResult.name == "ActionTimeout")
@@ -201,6 +204,8 @@ return function(test)
 	check("queued duplicate commits second", invokeResults[2] ~= nil and invokeResults[2].ok == true and commits[2] == "shield")
 	check("exactly one commit per call", #commits == 2 and #rollbacks == 0)
 
+	local commitsBeforeStale = #commits
+	local rollbacksBeforeStale = #rollbacks
 	invokeAsync(3, "bow")
 	session:restore({
 		revision = session:revision() + 1,
@@ -209,20 +214,31 @@ return function(test)
 	runtimeSched.spawn(handlerThreads.bow)
 	check("stale revision after yield refuses to apply", invokeResults[3] ~= nil and invokeResults[3].ok == false
 		and invokeResults[3].name == "LifecycleStaleRevision")
-	check("stale revision rolls staged effects back", #commits == 3 and rollbacks[1] == "bow")
+	check("stale revision compensates the staged commit",
+		#commits == commitsBeforeStale + 1 and commits[#commits] == "bow")
+	check("stale revision rolls staged effects back",
+		#rollbacks == rollbacksBeforeStale + 1 and rollbacks[#rollbacks] == "bow")
 	check("stale revision records a diagnostic", #diagnostics:findByName("LifecycleStaleRevision") >= 1)
+	test:expectMatch("stale revision diagnostic explains expected vs current",
+		diagnostics:findByName("LifecycleStaleRevision")[1].message,
+		"expected revision 0 but current revision is 1")
 
+	local commitsBeforeTimeout = #commits
 	invokeAsync(4, "axe")
 	runtimeSched.advance(5)
 	check("async action times out via contract policy", invokeResults[4] ~= nil and invokeResults[4].name == "ActionTimeout")
 
 	runtimeSched.spawn(handlerThreads.axe)
-	check("timed-out handler cannot commit", #commits == 3)
+	check("timed-out handler cannot commit", #commits == commitsBeforeTimeout)
 	check("commit-boundary cancellation is recorded", #diagnostics:findByName("ActionCancelled") == 1)
+	test:expectMatch("cancellation diagnostic explains the discard",
+		diagnostics:findByName("ActionCancelled")[1].message,
+		"InventoryService.GrantItem was cancelled (timeout); staged effects were discarded")
 
 	invokeAsync(5, "lance")
 	runtimeSched.spawn(handlerThreads.lance)
-	check("gate recovers after timeout", invokeResults[5] ~= nil and invokeResults[5].ok == true and commits[4] == "lance")
+	check("gate recovers after timeout", invokeResults[5] ~= nil and invokeResults[5].ok == true
+		and commits[#commits] == "lance" and #commits == commitsBeforeTimeout + 1)
 
 	local destroyDiag = Contracts.diagnostics()
 	local rejectSystem = Contracts.system("RejectService")
@@ -256,6 +272,8 @@ return function(test)
 	check("reject policy returns ActionBusy for in-flight duplicates", rejectResults[2] ~= nil
 		and rejectResults[2].name == "ActionBusy")
 	check("reject policy records ActionBusy diagnostic", #destroyDiag:findByName("ActionBusy") == 1)
+	test:expectMatch("busy diagnostic names the action",
+		destroyDiag:findByName("ActionBusy")[1].message, "Reserve is already running for this session")
 
 	rejectSched.spawn(rejectThreads[1])
 	check("original call still completes after rejection", rejectResults[1] ~= nil and rejectResults[1].ok == true)
