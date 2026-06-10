@@ -15,6 +15,7 @@ local suites = {
 	{ name = "adapters_examples", run = require("./suites/adapters_examples") },
 	{ name = "scanner_studio", run = require("./suites/scanner_studio") },
 	{ name = "studio_bridge", run = require("./suites/studio_bridge") },
+	{ name = "boundaries", run = require("./suites/boundaries") },
 	{ name = "host_tools", run = require("./suites/host_tools") },
 }
 
