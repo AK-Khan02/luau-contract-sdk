@@ -349,7 +349,7 @@ function validators.vector3(schema: Schema, value: any, path: string?): Validati
 end
 
 function validators.custom(schema: Schema, value: any, path: string?): ValidationResult
-	local ok, acceptedOrReason, normalized = pcall(schema.validator, value)
+	local ok, acceptedOrReason, _reason, normalized = pcall(schema.validator, value)
 	if not ok then
 		return fail(path, tostring(acceptedOrReason))
 	end
