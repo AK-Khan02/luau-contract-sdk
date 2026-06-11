@@ -1,8 +1,12 @@
 .planning/
 planning/
 
+# Agent tooling & installed skills — never commit (generic; no skill named)
 .agents/
 .codex/
+.claude/skills/
+skills/
+**/skills/
 skills-lock.json
 .agent-instructions/
 agent-instructions*/
