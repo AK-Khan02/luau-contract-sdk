@@ -11,6 +11,7 @@ return {
 	Ownership = load("./Ownership", "./Roblox/Ownership"),
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
 	PlayerCancellation = load("./PlayerCancellation", "./Roblox/PlayerCancellation"),
+	PlayersService = load("./PlayersService", "./Roblox/PlayersService"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
 	RelayPublisher = load("./RelayPublisher", "./Roblox/RelayPublisher"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),

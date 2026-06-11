@@ -1,4 +1,5 @@
 local AsyncGate = require("../Core/AsyncGate")
+local PlayersService = require("./PlayersService")
 local RateLimiter = require("../Core/RateLimiter")
 local Schema = require("../Core/Schema")
 local TaskScheduler = require("./TaskScheduler")
@@ -20,7 +21,31 @@ local function copyMap(value)
 	return copy
 end
 
+-- Real Instances error on invalid member reads instead of returning nil, so
+-- class checks must go through IsA. Returns nil when the remote has no IsA
+-- (legacy table fakes), letting callers fall back to duck typing.
+local function remoteClassCheck(remote, className)
+	if remote == nil then
+		return nil
+	end
+	local readable, isA = pcall(function()
+		return remote.IsA
+	end)
+	if not readable or type(isA) ~= "function" then
+		return nil
+	end
+	local ok, result = pcall(isA, remote, className)
+	if not ok then
+		return nil
+	end
+	return result == true
+end
+
 local function hasServerEvent(remote)
+	local byClass = remoteClassCheck(remote, "BaseRemoteEvent")
+	if byClass ~= nil then
+		return byClass
+	end
 	return remote and remote.OnServerEvent and remote.OnServerEvent.Connect
 end
 
@@ -48,20 +73,95 @@ local function shouldUseRemoteFunction(remote, options, remoteOptions)
 	if kind == "event" then
 		return false
 	end
+	local byClass = remoteClassCheck(remote, "RemoteFunction")
+	if byClass ~= nil then
+		return byClass
+	end
 	if remoteOptions.response ~= nil or options.response ~= nil then
 		return true
 	end
 	return remote and remote.OnServerInvoke ~= nil
 end
 
+-- Per-player bucket key. Prefer a stable UserId so the key is a small scalar
+-- that survives across the player's Instances and can be evicted on leave;
+-- fall back to the player value, then a shared anonymous bucket.
+local function playerBucketKey(player)
+	if type(player) == "table" and player.UserId ~= nil then
+		return player.UserId
+	end
+	return player or "__anonymous"
+end
+
+local function safeDisconnect(connection)
+	if connection == nil then
+		return
+	end
+	local disconnect = connection.Disconnect
+	if type(disconnect) == "function" then
+		disconnect(connection)
+	end
+end
+
+local function composeConnection(base, extra)
+	if extra == nil then
+		return base
+	end
+	return {
+		Disconnect = function()
+			safeDisconnect(base)
+			safeDisconnect(extra)
+		end,
+	}
+end
+
+local function resolvePlayersService(options)
+	if options.playersService ~= nil then
+		return options.playersService
+	end
+	-- Auto-resolve the live Players service so eviction works without wiring;
+	-- the engine global lives in PlayersService (a --!nocheck module).
+	return PlayersService.resolve()
+end
+
+-- Evict a player's rate-limit bucket when they leave so per-player keys cannot
+-- accumulate for the lifetime of the server.
+local function connectPlayerEviction(limiter, options)
+	if limiter == nil then
+		return nil
+	end
+	local players = resolvePlayersService(options)
+	local removing = players and players.PlayerRemoving
+	if removing == nil or type(removing.Connect) ~= "function" then
+		return nil
+	end
+	return removing:Connect(function(player) -- contracts-scan: ignore raw-remote-handler
+		limiter:removeKey(playerBucketKey(player))
+	end)
+end
+
 local function connectServerFunction(remote, handler)
-	local previous = remote.OnServerInvoke
+	-- OnServerInvoke is a write-only callback on real RemoteFunctions: reads
+	-- throw, so the previous callback can only be captured (and restored) on
+	-- fakes that allow reading it.
+	local readable, previous = pcall(function()
+		return remote.OnServerInvoke
+	end)
+
 	remote.OnServerInvoke = handler
 
 	return {
 		Disconnect = function()
-			if remote.OnServerInvoke == handler then
+			local ok, current = pcall(function()
+				return remote.OnServerInvoke
+			end)
+			if ok and current ~= handler then
+				return
+			end
+			if readable then
 				remote.OnServerInvoke = previous
+			else
+				remote.OnServerInvoke = nil
 			end
 		end,
 	}
@@ -186,6 +286,31 @@ local function expectedRevision(options, remoteOptions, player, payload, remoteN
 	return revision, true
 end
 
+-- Config-time guard: the bucket key is chosen BEFORE payload validation, so it
+-- must never be derived from client-controlled payload — that would let a
+-- client mint unlimited buckets (each with a fresh budget) to bypass the limit
+-- and grow memory without bound.
+local function assertRateLimitKey(rateLimit: any, remoteName: any)
+	local key = rateLimit and rateLimit.key
+	if key == nil or type(key) == "function" or key == "global" or key == "remote" then
+		return
+	end
+	if type(key) == "string" and string.sub(key, 1, 8) == "payload." then
+		error(
+			"RemoteGuard rate limit for " .. tostring(remoteName)
+				.. " cannot key on client payload (" .. key
+				.. "); use the default actor key, \"global\", \"remote\", or a function",
+			3
+		)
+	end
+	error(
+		"RemoteGuard rate limit for " .. tostring(remoteName)
+			.. " has an invalid key " .. tostring(key)
+			.. "; use the default actor key, \"global\", \"remote\", or a function",
+		3
+	)
+end
+
 local function rateLimitKey(rateLimit, player, payload, remoteName)
 	local key = rateLimit and rateLimit.key
 	if type(key) == "function" then
@@ -193,7 +318,7 @@ local function rateLimitKey(rateLimit, player, payload, remoteName)
 		if ok and value ~= nil then
 			return value
 		end
-		return player or "__anonymous"
+		return playerBucketKey(player)
 	end
 	if key == "global" then
 		return "__global"
@@ -201,10 +326,7 @@ local function rateLimitKey(rateLimit, player, payload, remoteName)
 	if key == "remote" then
 		return remoteName
 	end
-	if type(key) == "string" and string.sub(key, 1, 8) == "payload." then
-		return fieldPathValue(payload, string.sub(key, 9)) or player or "__anonymous"
-	end
-	return player or "__anonymous"
+	return playerBucketKey(player)
 end
 
 local function checkRateLimit(limiter, rateLimit, player, payload, remoteName, diagnostics, systemContract)
@@ -453,6 +575,8 @@ function RemoteGuard.connect(systemContract, remoteName, remote, handler, option
 	remoteOptions.rateLimit = options.rateLimit or remoteOptions.rateLimit
 	remoteOptions.lifecycle = options.lifecycle or remoteOptions.lifecycle or {}
 
+	assertRateLimitKey(remoteOptions.rateLimit, remoteName)
+
 	local asyncPolicy = resolveAsyncPolicy(systemContract, remoteOptions.action)
 	local asyncGate = resolveAsyncGate(options, asyncPolicy, remoteOptions.action)
 
@@ -470,14 +594,19 @@ function RemoteGuard.connect(systemContract, remoteName, remote, handler, option
 		return runLegacyRemote(systemContract, remoteName, remoteOptions, handler, options, player, payload, diagnostics)
 	end
 
+	local evictionConnection = connectPlayerEviction(limiter, options)
+
+	local baseConnection
 	if shouldUseRemoteFunction(remote, options, remoteOptions) then
-		return connectServerFunction(remote, handleServerCall)
+		baseConnection = connectServerFunction(remote, handleServerCall)
+	else
+		assertServerEvent(remote)
+		baseConnection = remote.OnServerEvent:Connect(function(player, payload) -- contracts-scan: ignore raw-remote-handler
+			return handleServerCall(player, payload)
+		end)
 	end
 
-	assertServerEvent(remote)
-	return remote.OnServerEvent:Connect(function(player, payload) -- contracts-scan: ignore raw-remote-handler
-		return handleServerCall(player, payload)
-	end)
+	return composeConnection(baseConnection, evictionConnection)
 end
 
 return RemoteGuard

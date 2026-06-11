@@ -192,4 +192,35 @@ return function(test)
 	local overridden = RateLimiter.new({ maxRequests = 10, windowSeconds = 1 }, clock)
 	test:expect("per-check override tightens the limit", overridden:check("player", "Buy", { maxRequests = 1 }), true)
 	test:expect("per-check override is enforced", overridden:check("player", "Buy", { maxRequests = 1 }), false)
+
+	-- The default clock must be wall time. os.clock() (the previous default)
+	-- reports process CPU seconds, which is orders of magnitude away from
+	-- os.time() and miscalibrates every window.
+	local wallClockLimiter = RateLimiter.new({ maxRequests = 1, windowSeconds = 1 })
+	test:expect("default clock tracks wall time", math.abs(wallClockLimiter._clock() - os.time()) <= 2, true)
+
+	-- removeKey reclaims a bucket so the key starts fresh.
+	state.now = 100
+	local evicting = RateLimiter.new({ maxRequests = 1, windowSeconds = 1000 }, clock)
+	test:expect("key consumes its budget before eviction", evicting:check(7, "Fire"), true)
+	test:expect("key is exhausted before eviction", evicting:check(7, "Fire"), false)
+	test:expect("limiter tracks one key", evicting:keyCount(), 1)
+	evicting:removeKey(7)
+	test:expect("removeKey drops the bucket", evicting:keyCount(), 0)
+	test:expect("evicted key starts a fresh window", evicting:check(7, "Fire"), true)
+
+	-- Idle sweep reclaims keys whose window has fully elapsed. It only runs
+	-- after the sweep interval and never affects a live window.
+	local sweeping = RateLimiter.new({ maxRequests = 5, windowSeconds = 1, sweepIntervalSeconds = 30 }, clock)
+	state.now = 0
+	sweeping:check("ghost", "Fire")
+	test:expect("idle key is retained before the sweep interval", sweeping:keyCount(), 1)
+	state.now = 0.5
+	sweeping:check("live", "Fire")
+	state.now = 40
+	-- Past the sweep interval: "ghost" (window elapsed) is dropped, the just-seen
+	-- "live" key for this same check survives.
+	sweeping:check("live", "Fire")
+	test:expect("elapsed-window key is swept", sweeping:keyCount(), 1)
+	test:expect("active key survives the sweep", sweeping:check("live", "Fire"), true)
 end

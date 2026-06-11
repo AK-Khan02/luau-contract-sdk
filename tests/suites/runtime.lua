@@ -86,7 +86,6 @@ return function(test)
 				rateLimit = {
 					maxRequests = 1,
 					windowSeconds = 10,
-					key = "payload.ItemId",
 				},
 			},
 		})

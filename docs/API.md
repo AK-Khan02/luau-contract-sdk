@@ -812,7 +812,7 @@ Contract
 		rateLimit = {
 			maxRequests = 4,
 			windowSeconds = 1,
-			key = "payload.ItemId",
+			key = "remote",
 		},
 	})
 ```
@@ -828,8 +828,15 @@ Supported remote policy fields:
 - `lifecycle.revision`: payload field path or resolver for stale revision checks.
 - `rateLimit.maxRequests`
 - `rateLimit.windowSeconds`
-- `rateLimit.key`: defaults to actor; also supports `global`, `remote`, and
-  `payload.FieldName`.
+- `rateLimit.key`: defaults to the calling player (keyed by `UserId`); also
+  supports `"global"`, `"remote"`, or a `function(player, payload, remoteName)`.
+  Client-payload-derived keys (`"payload.Field"`) are **rejected at connect
+  time**: the bucket is chosen before payload validation, so a payload key
+  would let a client mint unlimited buckets to bypass the limit. Per-player
+  buckets are evicted on `Players.PlayerRemoving` (pass `options.playersService`
+  to `RemoteGuard.connect`, or it resolves `game:GetService("Players")`), and
+  any key whose window has fully elapsed is swept automatically. Windows are
+  measured against wall-clock time.
 
 Useful remote methods:
 

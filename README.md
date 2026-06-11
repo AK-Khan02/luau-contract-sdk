@@ -379,7 +379,7 @@ local InventoryContract = Contracts.system("InventoryService")
 		rateLimit = {
 			maxRequests = 4,
 			windowSeconds = 1,
-			key = "payload.ItemId",
+			key = "remote",
 		},
 	})
 
