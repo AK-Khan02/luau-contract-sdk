@@ -321,6 +321,74 @@ return function(test)
 	check("stale lifecycle apply rolls back committed staged effects", staleResult.ok == false and staleResult.name == "LifecycleStaleRevision" and staleInventory.Coin ~= true)
 	check("stale lifecycle rollback runs in result", staleRollbackLog[1] == "commit" and staleRollbackLog[2] == "rollback")
 	check("stale lifecycle reports rolled back effect", staleResult.effects[1].status == "rolledBack" and staleResult.rollback.rolledBack == 1)
+
+	test:section("Eager effects bypass rollback")
+
+	-- scope:write runs its writer immediately, so a post-commit failure cannot
+	-- undo it: only staged effects are transactional. The gap must be surfaced
+	-- loudly rather than leaving state silently mutated under a failed action.
+	local EagerLifecycle = Contracts.lifecycle("Match")
+		:transition("Lobby", "RoundStarted", "Running")
+
+	local EagerMatch = Contracts.system("EagerRollbackMatch")
+		:strictPermissions()
+		:mayWrite("Match.Rewards")
+		:lifecycle("Match", EagerLifecycle)
+		:action("GrantOnStart", {
+			output = GrantOutput,
+			writes = { "Match.Rewards" },
+			lifecycle = {
+				requires = { Match = "Lobby" },
+				emits = { Match = "RoundStarted" },
+			},
+		})
+		:action("ExternalStart", {
+			output = Contracts.literal("started"),
+			lifecycle = {
+				requires = { Match = "Lobby" },
+				emits = { Match = "RoundStarted" },
+			},
+		})
+
+	local eagerInventory = {}
+	local eagerSession = EagerMatch:lifecycleSession({ Match = "Lobby" })
+	local eagerDiag = Contracts.diagnostics()
+	local eagerStagedCommitRan = false
+	local eagerResult = EagerMatch:runAction("GrantOnStart", {
+		context = { inventory = eagerInventory },
+		session = eagerSession,
+		diagnostics = eagerDiag,
+	}, function(scope)
+		scope:write("Match.Rewards", function(context)
+			context.inventory.EagerCoin = "applied"
+		end)
+		scope:stageWrite("Match.Rewards", {
+			commit = function(context)
+				eagerStagedCommitRan = true
+				context.inventory.StagedCoin = true
+			end,
+			rollback = function(context)
+				context.inventory.StagedCoin = nil
+			end,
+		})
+		-- Advance the session out from under the action so apply() fails after
+		-- the staged effect has already committed.
+		eagerSession:apply("ExternalStart")
+		return { granted = true, itemId = "Coin" }
+	end)
+
+	check("post-commit stale revision fails the action",
+		eagerResult.ok == false and eagerResult.name == "LifecycleStaleRevision")
+	check("staged effect is rolled back", eagerStagedCommitRan == true and eagerInventory.StagedCoin == nil)
+	check("eager write is not rolled back (the gap)", eagerInventory.EagerCoin == "applied")
+	check("eager rollback gap is surfaced as a diagnostic",
+		#eagerDiag:findByName("ActionEagerEffectsNotRolledBack") == 1)
+	local eagerWarn = eagerDiag:findByName("ActionEagerEffectsNotRolledBack")[1]
+	check("eager warning enumerates the non-transactional mutation",
+		eagerWarn ~= nil and eagerWarn.context.effects[1].kind == "write"
+			and eagerWarn.context.effects[1].target == "Match.Rewards")
+	check("eager warning is a warning, not an error", eagerWarn ~= nil and eagerWarn.level == "warn")
+
 	test:section("EffectPlan failure paths")
 
 	local EffectPlan = Contracts.EffectPlan

@@ -207,6 +207,30 @@ function EffectPlan.stage(self: any, kind: string, targetPath: string, operation
 	return copyReports({ effect })[1]
 end
 
+local MUTATING_KINDS: {[string]: boolean} = {
+	write = true,
+	create = true,
+	destroy = true,
+	touch = true,
+}
+
+-- Eager scope:write/create/destroy/touch run their writer immediately and are
+-- recorded as non-transactional, so commit/rollback cannot undo them. Callers
+-- use this to warn when an action fails after eager mutations have applied.
+function EffectPlan.eagerMutations(self: any): {any}
+	local out = {}
+	for _, effect in ipairs(self._effects) do
+		local kind: string = effect.kind
+		if effect.transactional ~= true and MUTATING_KINDS[kind] == true then
+			table.insert(out, {
+				kind = kind,
+				target = effect.target,
+			})
+		end
+	end
+	return out
+end
+
 function EffectPlan.effects(self: any): {EffectReport}
 	return copyReports(self._effects)
 end

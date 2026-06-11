@@ -360,6 +360,29 @@ local function recordViolation(diagnostics: any, fields: any): any
 	return fields
 end
 
+-- Eager scope:write/create/destroy/touch apply immediately and are not
+-- transactional, so a rollback leaves them in place. Surface that loudly so a
+-- failed action that mutated state via eager effects is never silent.
+local function warnEagerEffectsNotRolledBack(systemName: string, scope: any, diagnostics: any, actionName: string, context: any)
+	local eager = scope:eagerMutations()
+	if #eager == 0 then
+		return
+	end
+	recordViolation(diagnostics, {
+		level = "warn",
+		category = "effect",
+		system = systemName,
+		name = "ActionEagerEffectsNotRolledBack",
+		message = "action " .. actionName .. " failed after running " .. tostring(#eager)
+			.. " eager effect(s); only staged effects roll back, so these remain applied",
+		context = {
+			action = actionName,
+			remote = context.remote,
+			effects = eager,
+		},
+	})
+end
+
 local function actionContext(options: any, systemName: string, actionName: string): any
 	local source = options.context or {}
 	local context = copyMap(source)
@@ -1797,6 +1820,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 	local commit = scope:commitEffects(diagnostics, effectOptions)
 	context.effects = scope:effectView()
 	if not commit.ok then
+		warnEagerEffectsNotRolledBack(self._name, scope, diagnostics, actionName, context)
 		return {
 			ok = false,
 			name = commit.name,
@@ -1820,6 +1844,7 @@ function System.runAction(self: any, actionName: string, options: any?, handler:
 	if not lifecycle.ok then
 		local rollback = scope:rollbackEffects(diagnostics, effectOptions)
 		context.effects = scope:effectView()
+		warnEagerEffectsNotRolledBack(self._name, scope, diagnostics, actionName, context)
 		return {
 			ok = false,
 			name = lifecycle.name or "ActionLifecycleTransitionInvalid",

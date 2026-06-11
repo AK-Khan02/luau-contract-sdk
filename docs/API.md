@@ -347,7 +347,10 @@ end)
 If a staged effect commit fails, the SDK records `ActionCommitFailed`, rolls back
 previously committed staged effects in reverse order, and returns the rollback
 report. If rollback fails, the SDK records `ActionRollbackFailed`; if no rollback
-hook exists, it records `ActionRollbackUnavailable`.
+hook exists, it records `ActionRollbackUnavailable`. Whenever a rollback runs and
+the action had also performed eager (non-staged) mutations, the SDK additionally
+records an `ActionEagerEffectsNotRolledBack` warning listing those mutations,
+which remain applied.
 
 Effect reports are serializable and include:
 

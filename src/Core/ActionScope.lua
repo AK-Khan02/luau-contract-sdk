@@ -70,6 +70,10 @@ function ActionScope.effects(self: any): {Effect}
 	return self._effectPlan:effects()
 end
 
+function ActionScope.eagerMutations(self: any): {any}
+	return self._effectPlan:eagerMutations()
+end
+
 function ActionScope.effectView(self: any): any
 	return self._effectPlan:view()
 end
