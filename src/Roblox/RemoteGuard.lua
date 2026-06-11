@@ -349,27 +349,46 @@ local function runActionRemote(systemContract, remoteName, remoteOptions, handle
 		end)
 	end
 
-	local actionResult: any
-	if asyncPolicy ~= nil and asyncGate ~= nil then
-		local key: any = session
-		if key == nil then
-			key = player
-		end
-		if key == nil then
-			key = remoteName
+	local function run(onStarted: any): any
+		if asyncPolicy ~= nil and asyncGate ~= nil then
+			local key: any = session
+			if key == nil then
+				key = player
+			end
+			if key == nil then
+				key = remoteName
+			end
+
+			local gate: any = asyncGate
+			return gate:run(key, {
+				concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
+				timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
+				system = systemContract:name(),
+				action = remoteOptions.action,
+				actor = player,
+				remote = remoteName,
+				diagnostics = diagnostics,
+				onStarted = onStarted,
+			}, execute)
 		end
 
-		local gate: any = options.asyncGate
-		actionResult = gate:run(key, {
-			concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
-			timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
-			system = systemContract:name(),
+		onStarted()
+		return execute(nil)
+	end
+
+	local actionResult: any
+	local pipeline: any = options.pipeline
+	if pipeline ~= nil then
+		actionResult = pipeline({
 			action = remoteOptions.action,
+			actor = player,
+			payload = payload,
 			remote = remoteName,
+			validated = true,
 			diagnostics = diagnostics,
-		}, execute)
+		}, run)
 	else
-		actionResult = execute(nil)
+		actionResult = run(function() end)
 	end
 
 	if not actionResult.ok then

@@ -19,9 +19,12 @@ Use it to define and enforce:
 - preconditions, postconditions, and named diagnostics
 - runtime handlers, lifecycle sessions, and remote binding
 - async (yielding) handlers with concurrency policies, timeouts, and cancellation
+- automatic cancellation of a player's in-flight actions when they leave
+- read-only action taps and guarded middleware for metrics, logging, and load shedding
 - generated strict Luau remote wrappers and deterministic remote attack tests
 - stable reports for overlays, docs, tests, and Studio tooling
 - live diagnostics streaming into the Studio plugin during play-tests
+- production diagnostics relayed over HTTP with a bundled relay server and `tail` CLI
 - CLI and CI reports for Roblox projects
 
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters

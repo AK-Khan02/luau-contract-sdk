@@ -340,6 +340,316 @@ return function(test)
 	check("scope onCancel callbacks fire with the reason", sawCancel[1] == "timeout")
 	check("watch call timed out", watchResult ~= nil and watchResult.name == "ActionTimeout")
 
+	test:section("Player-leave cancellation")
+
+	local PlayerCancellation = require("../../src/Roblox/PlayerCancellation")
+
+	local cancelSystem = Contracts.system("CancelService")
+		:action("SaveLoadout", {
+			input = Contracts.object({
+				id = Contracts.stringId(),
+			}, { allowExtra = false }),
+			writes = { "PlayerData/Loadout" },
+			async = {
+				timeoutSeconds = false,
+				concurrency = "serialize",
+			},
+		})
+
+	local cancelSched = ManualScheduler.new()
+	local cancelDiag = Contracts.diagnostics()
+	local cancelRuntime = Contracts.runtime(cancelSystem, {
+		diagnostics = cancelDiag,
+		scheduler = cancelSched,
+	})
+
+	local cancelCommits = {}
+	local cancelThreads = {}
+	cancelRuntime:implement("SaveLoadout", function(scope)
+		local id = scope:payload().id
+		scope:stageWrite("PlayerData/Loadout", {
+			commit = function()
+				table.insert(cancelCommits, id)
+			end,
+		})
+		cancelThreads[id] = coroutine.running()
+		coroutine.yield()
+		return nil
+	end)
+
+	local playerA = { UserId = 1, Name = "A" }
+	local playerB = { UserId = 2, Name = "B" }
+	local cancelResults = {}
+	local function invokeFor(slot, player, id)
+		cancelSched.spawn(function()
+			cancelResults[slot] = cancelRuntime:invoke("SaveLoadout", {
+				payload = { id = id },
+				actor = player,
+			})
+		end)
+	end
+
+	check("cancelActor with no gate is a no-op", (function()
+		local fresh = Contracts.runtime(cancelSystem, { scheduler = ManualScheduler.new() })
+		local summary = fresh:cancelActor(playerA, "player-left")
+		return summary.cancelledRuns == 0 and summary.purgedWaiters == 0
+	end)())
+
+	-- In-flight cancellation: A's first call is mid-yield, second is queued (keyed by actor).
+	invokeFor(1, playerA, "alpha")
+	invokeFor(2, playerA, "beta")
+	invokeFor(3, playerB, "gamma")
+	check("setup: A in-flight, A queued, B in-flight", cancelThreads.alpha ~= nil and cancelThreads.beta == nil
+		and cancelThreads.gamma ~= nil)
+
+	local summary = cancelRuntime:cancelActor(playerA, "player-left")
+	check("cancelActor reports one run and one waiter", summary.cancelledRuns == 1 and summary.purgedWaiters == 1)
+	check("in-flight run settles as ActionCancelled", cancelResults[1] ~= nil and cancelResults[1].ok == false
+		and cancelResults[1].name == "ActionCancelled")
+	check("queued waiter settles as ActionCancelled", cancelResults[2] ~= nil and cancelResults[2].ok == false
+		and cancelResults[2].name == "ActionCancelled")
+	test:expectMatch("queued waiter failure names the action and reason",
+		cancelResults[2].reason, "SaveLoadout cancelled while queued (player-left)")
+	check("other actors are unaffected by cancelActor", cancelResults[3] == nil and cancelThreads.gamma ~= nil)
+
+	cancelSched.spawn(cancelThreads.alpha)
+	check("zombie handler cannot commit after cancellation", #cancelCommits == 0)
+	check("commit boundary records the cancellation", #cancelDiag:findByName("ActionCancelled") >= 1)
+
+	cancelSched.spawn(cancelThreads.gamma)
+	check("unrelated in-flight run still commits", cancelResults[3] ~= nil and cancelResults[3].ok == true
+		and cancelCommits[1] == "gamma")
+
+	local repeatSummary = cancelRuntime:cancelActor(playerA, "player-left")
+	check("cancelActor after settle is a no-op", repeatSummary.cancelledRuns == 0 and repeatSummary.purgedWaiters == 0)
+
+	-- Adapter wiring with a fake Players service.
+	local removingHandlers = {}
+	local fakePlayers = {
+		PlayerRemoving = {
+			Connect = function(_, handler)
+				table.insert(removingHandlers, handler)
+				return {
+					Disconnect = function()
+						removingHandlers = {}
+					end,
+				}
+			end,
+		},
+	}
+
+	local leaveHandle = PlayerCancellation.cancelOnLeave(cancelRuntime, fakePlayers)
+	check("cancelOnLeave connects to PlayerRemoving", #removingHandlers == 1)
+
+	invokeFor(4, playerB, "delta")
+	check("setup: B back in flight", cancelThreads.delta ~= nil)
+	removingHandlers[1](playerB)
+	check("PlayerRemoving cancels that player's runs", cancelResults[4] ~= nil
+		and cancelResults[4].name == "ActionCancelled")
+
+	leaveHandle.destroy()
+	leaveHandle.destroy()
+	check("cancelOnLeave destroy is idempotent and disconnects", #removingHandlers == 0)
+
+	check("cancelOnLeave validates the players service", pcall(function()
+		PlayerCancellation.cancelOnLeave(cancelRuntime, {})
+	end) == false)
+
+	test:section("Timeout lock retention")
+
+	-- A timed-out handler is still executing. Releasing the serialize lock at
+	-- timeout would run the session's next action concurrently with the
+	-- zombie — the double-spend race serialize exists to prevent.
+	local zombieSched = ManualScheduler.new()
+	local zombieGate = AsyncGate.new({ scheduler = zombieSched })
+	local zombieDiag = Contracts.diagnostics()
+	local zombieThread = nil
+	local secondRan = false
+	local zombieResults = {}
+
+	local function runOnSession(slot, fn)
+		zombieSched.spawn(function()
+			zombieResults[slot] = zombieGate:run("session", {
+				concurrency = "serialize",
+				timeoutSeconds = 3,
+				system = "ZombieService",
+				action = "Save",
+				diagnostics = zombieDiag,
+			}, fn)
+		end)
+	end
+
+	runOnSession(1, function()
+		zombieThread = coroutine.running()
+		coroutine.yield()
+		return { ok = true, label = "late" }
+	end)
+	runOnSession(2, function()
+		secondRan = true
+		return { ok = true, label = "second" }
+	end)
+	check("setup: zombie in flight, second queued", zombieThread ~= nil and secondRan == false)
+
+	zombieSched.advance(3)
+	check("timeout settles the caller with ActionTimeout", zombieResults[1] ~= nil
+		and zombieResults[1].name == "ActionTimeout")
+	check("serialize lock is held until the zombie finishes", secondRan == false and zombieResults[2] == nil)
+
+	zombieSched.spawn(zombieThread)
+	check("queued run starts after the zombie observes cancellation", secondRan == true
+		and zombieResults[2] ~= nil and zombieResults[2].ok == true)
+	check("late zombie result records a diagnostic", #zombieDiag:findByName("ActionLateResult") == 1)
+
+	test:section("cancelActor reentrancy")
+
+	-- A cancelled caller's continuation runs synchronously and can finish other
+	-- in-flight work, releasing locks while cancelActor is still purging. Every
+	-- queued waiter must be purged before any continuation runs, or a release
+	-- hands the lock to a waiter that was supposed to be cancelled.
+	local reentrantSched = ManualScheduler.new()
+	local reentrantGate = AsyncGate.new({ scheduler = reentrantSched })
+	local leaver = { UserId = 10 }
+	local stayer = { UserId = 11 }
+
+	local holderThreads = {}
+	local function holdLock(key)
+		reentrantSched.spawn(function()
+			reentrantGate:run(key, {
+				concurrency = "serialize",
+				actor = stayer,
+			}, function()
+				holderThreads[key] = coroutine.running()
+				coroutine.yield()
+				return { ok = true }
+			end)
+		end)
+	end
+
+	holdLock("loadout")
+	holdLock("checkpoint")
+	check("setup: both locks held by the staying actor",
+		holderThreads.loadout ~= nil and holderThreads.checkpoint ~= nil)
+
+	local leaverRuns = 0
+	local leaverResults = {}
+	local function queueLeaver(slot, key)
+		reentrantSched.spawn(function()
+			leaverResults[slot] = reentrantGate:run(key, {
+				concurrency = "serialize",
+				actor = leaver,
+			}, function()
+				leaverRuns += 1
+				return { ok = true }
+			end)
+			for _, thread in pairs(holderThreads) do
+				pcall(function()
+					reentrantSched.spawn(thread)
+				end)
+			end
+		end)
+	end
+
+	queueLeaver(1, "loadout")
+	queueLeaver(2, "checkpoint")
+	check("setup: leaver queued behind both locks", leaverRuns == 0
+		and leaverResults[1] == nil and leaverResults[2] == nil)
+
+	local reentrantSummary = reentrantGate:cancelActor(leaver, "player-left")
+	check("purged continuations cannot start the actor's other queued runs", leaverRuns == 0)
+	check("cancelActor purges queued waiters on every lock", reentrantSummary.purgedWaiters == 2)
+	check("both queued calls settle as cancelled",
+		leaverResults[1] ~= nil and leaverResults[1].name == "ActionCancelled"
+			and leaverResults[2] ~= nil and leaverResults[2].name == "ActionCancelled")
+
+	-- A snapshotted run can settle naturally while an earlier settle's
+	-- continuation unwinds; the summary must only count runs this call
+	-- actually cancelled.
+	local countSched = ManualScheduler.new()
+	local countGate = AsyncGate.new({ scheduler = countSched })
+	local countActor = { UserId = 12 }
+
+	local countHandlers = {}
+	local countResults = {}
+	local function startCounted(slot, key, other)
+		countSched.spawn(function()
+			countResults[slot] = countGate:run(key, {
+				concurrency = "serialize",
+				actor = countActor,
+			}, function()
+				countHandlers[slot] = coroutine.running()
+				coroutine.yield()
+				return { ok = true }
+			end)
+			if countHandlers[other] ~= nil then
+				pcall(function()
+					countSched.spawn(countHandlers[other])
+				end)
+			end
+		end)
+	end
+
+	startCounted(1, "save", 2)
+	startCounted(2, "teleport", 1)
+	check("setup: both counted runs in flight", countHandlers[1] ~= nil and countHandlers[2] ~= nil)
+
+	local countSummary = countGate:cancelActor(countActor, "player-left")
+	local cancelledCount = 0
+	local naturalCount = 0
+	for slot = 1, 2 do
+		local result = countResults[slot]
+		if result ~= nil and result.name == "ActionCancelled" then
+			cancelledCount += 1
+		elseif result ~= nil and result.ok == true then
+			naturalCount += 1
+		end
+	end
+	check("continuation completes the sibling run naturally", cancelledCount == 1 and naturalCount == 1)
+	check("summary counts only runs this call cancelled", countSummary.cancelledRuns == 1)
+
+	test:section("Standalone RemoteGuard async binding")
+
+	local RemoteGuard = require("../../src/Roblox/RemoteGuard")
+	local standaloneSystem = Contracts.system("StandaloneService")
+		:action("Reserve", {
+			input = Contracts.object({}, { allowExtra = false }),
+			async = {
+				timeoutSeconds = 5,
+			},
+			remote = {
+				name = "ReserveRemote",
+				direction = "server",
+			},
+		})
+
+	local standaloneSched = ManualScheduler.new()
+	local standaloneDiag = Contracts.diagnostics()
+	local standaloneInvoke = nil
+	local standaloneRemote = {
+		OnServerEvent = {
+			Connect = function(_, handler)
+				standaloneInvoke = handler
+				return {
+					Disconnect = function() end,
+				}
+			end,
+		},
+	}
+
+	local standaloneResult = nil
+	RemoteGuard.connect(standaloneSystem, "ReserveRemote", standaloneRemote, function()
+		standaloneResult = "handled"
+		return nil
+	end, {
+		diagnostics = standaloneDiag,
+		scheduler = standaloneSched,
+	})
+
+	standaloneSched.spawn(function()
+		standaloneInvoke({ UserId = 7 }, {})
+	end)
+	check("standalone connect with scheduler runs async actions", standaloneResult == "handled")
+	check("standalone async call records no failures", standaloneDiag:hasFailures() == false)
+
 	local destroyedRuntime = Contracts.runtime(scopeSystem, {
 		scheduler = ManualScheduler.new(),
 	})

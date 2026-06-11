@@ -10,6 +10,7 @@ return {
 	GuardRemote = load("./GuardRemote", "./Roblox/GuardRemote"),
 	Ownership = load("./Ownership", "./Roblox/Ownership"),
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
+	PlayerCancellation = load("./PlayerCancellation", "./Roblox/PlayerCancellation"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),
 	StudioBridgePublisher = load("./StudioBridgePublisher", "./Roblox/StudioBridgePublisher"),

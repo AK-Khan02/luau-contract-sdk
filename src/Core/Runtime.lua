@@ -110,6 +110,8 @@ function Runtime.new(systemContract: any, config: Config?): any
 		_boundRemotes = {},
 		_scheduler = options.scheduler,
 		_asyncGate = nil,
+		_taps = {},
+		_middleware = {},
 		_destroyed = false,
 	}, Runtime)
 
@@ -322,27 +324,264 @@ function Runtime.invoke(self: any, actionName: string, request: Request?): any
 	end
 
 	local asyncPolicy = self:_asyncPolicy(actionName)
-	if asyncPolicy == nil then
-		return execute(nil)
-	end
-
-	local gate = self:_gate()
-	local key = session
-	if key == nil then
-		key = runtimeRequest.actor
-	end
-	if key == nil then
-		key = actionName
-	end
-
-	return gate:run(key, {
-		concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
-		timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
-		system = self._system:name(),
+	local info = {
 		action = actionName,
+		actor = runtimeRequest.actor,
+		payload = runtimeRequest.payload,
 		remote = runtimeRequest.remote,
+		validated = false,
 		diagnostics = runtimeRequest.diagnostics,
-	}, execute)
+	}
+
+	return self:_runPipeline(info, function(onStarted: any): any
+		if asyncPolicy == nil then
+			onStarted()
+			return execute(nil)
+		end
+
+		local gate = self:_gate()
+		local key = session
+		if key == nil then
+			key = runtimeRequest.actor
+		end
+		if key == nil then
+			key = actionName
+		end
+
+		return gate:run(key, {
+			concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
+			timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
+			system = self._system:name(),
+			action = actionName,
+			actor = runtimeRequest.actor,
+			remote = runtimeRequest.remote,
+			diagnostics = runtimeRequest.diagnostics,
+			onStarted = onStarted,
+		}, execute)
+	end)
+end
+
+function Runtime._pipelineClock(self: any): () -> number
+	local scheduler: any = self._scheduler
+	if scheduler ~= nil and type(scheduler.clock) == "function" then
+		return scheduler.clock :: () -> number
+	end
+	return function()
+		if os and os.clock then
+			return os.clock()
+		end
+		return 0
+	end
+end
+
+function Runtime.onAction(self: any, handlers: any): () -> ()
+	self:_assertOpen()
+	if type(handlers) ~= "table" then
+		error("Runtime.onAction expects a table of handlers", 2)
+	end
+	if handlers.started ~= nil and type(handlers.started) ~= "function" then
+		error("Runtime.onAction started handler must be a function", 2)
+	end
+	if handlers.settled ~= nil and type(handlers.settled) ~= "function" then
+		error("Runtime.onAction settled handler must be a function", 2)
+	end
+	if handlers.started == nil and handlers.settled == nil then
+		error("Runtime.onAction expects a started or settled handler", 2)
+	end
+
+	local token = {}
+	self._taps[token] = {
+		started = handlers.started,
+		settled = handlers.settled,
+	}
+
+	return function()
+		self._taps[token] = nil
+	end
+end
+
+function Runtime._emitTap(self: any, phase: string, event: any)
+	for token, tap in pairs(self._taps) do
+		local listener = tap[phase]
+		if listener ~= nil then
+			local ok = pcall(listener, event)
+			if not ok then
+				self._taps[token] = nil
+			end
+		end
+	end
+end
+
+function Runtime.use(self: any, middlewareFn: any, options: any?): () -> ()
+	self:_assertOpen()
+	if type(middlewareFn) ~= "function" then
+		error("Runtime.use expects a middleware function", 2)
+	end
+
+	local useOptions: any = options or {}
+	local actions = nil
+	if useOptions.actions ~= nil then
+		if type(useOptions.actions) ~= "table" then
+			error("Runtime.use actions filter must be a list of action names", 2)
+		end
+		actions = {}
+		for _, actionName in ipairs(useOptions.actions) do
+			if type(actionName) ~= "string" then
+				error("Runtime.use actions filter must be a list of action names", 2)
+			end
+			actions[actionName] = true
+		end
+	end
+
+	local entry = {
+		fn = middlewareFn,
+		actions = actions,
+	}
+	table.insert(self._middleware, entry)
+
+	return function()
+		for index, candidate in ipairs(self._middleware) do
+			if candidate == entry then
+				table.remove(self._middleware, index)
+				break
+			end
+		end
+	end
+end
+
+function Runtime._middlewareFailure(self: any, info: any, name: string, message: string): any
+	record(info.diagnostics or self._diagnostics, {
+		level = "error",
+		category = "runtime",
+		system = self._system:name(),
+		name = name,
+		message = message,
+		context = {
+			action = info.action,
+			remote = info.remote,
+		},
+	})
+
+	return {
+		ok = false,
+		name = name,
+		reason = message,
+	}
+end
+
+function Runtime._runPipeline(self: any, info: any, run: any): any
+	-- Snapshot the matching wrap chain at invocation start: use()/remove during
+	-- an in-flight invocation must only affect later invocations.
+	local chain: {any} = {}
+	for _, entry in ipairs(self._middleware) do
+		if entry.actions == nil or entry.actions[info.action] == true then
+			table.insert(chain, entry.fn)
+		end
+	end
+
+	local hasTaps = next(self._taps) ~= nil
+	local clock = self:_pipelineClock()
+	local queuedAt = clock()
+	local startedAt = nil
+
+	local function onStarted()
+		startedAt = clock()
+		if hasTaps then
+			self:_emitTap("started", {
+				action = info.action,
+				actor = info.actor,
+				remote = info.remote,
+				queuedAt = queuedAt,
+				startedAt = startedAt,
+			})
+		end
+	end
+
+	local validResults: any = setmetatable({}, { __mode = "k" })
+	local function accept(result: any): any
+		if type(result) == "table" then
+			validResults[result] = true
+		end
+		return result
+	end
+
+	local ranAction = false
+	local ctx: any = {
+		action = info.action,
+		actor = info.actor,
+		payload = info.payload,
+		remote = info.remote,
+		validated = info.validated == true,
+		locals = {},
+	}
+	function ctx.fail(_, name: any, reason: any): any
+		if ranAction then
+			error("ctx:fail cannot be called after next()", 2)
+		end
+		local failName = type(name) == "string" and name or "ActionRejected"
+		local message = reason ~= nil and tostring(reason) or (failName .. " from middleware")
+		return accept(self:_middlewareFailure(info, failName, message))
+	end
+
+	local function invokeChain(index: number): any
+		if index > #chain then
+			ranAction = true
+			return accept(run(onStarted))
+		end
+
+		local middlewareFn = chain[index]
+		local nextCalled = false
+		local function nextFn(): any
+			if nextCalled then
+				error("next() already called", 2)
+			end
+			nextCalled = true
+			return invokeChain(index + 1)
+		end
+
+		local ok, value = pcall(middlewareFn, ctx, nextFn)
+		if not ok then
+			return accept(self:_middlewareFailure(info, "ActionMiddlewareError", tostring(value)))
+		end
+		if type(value) == "table" and validResults[value] == true then
+			return value
+		end
+		return accept(self:_middlewareFailure(
+			info,
+			"ActionMiddlewareInvalidResult",
+			"middleware must return next() result or ctx:fail() result"
+		))
+	end
+
+	local result = invokeChain(1)
+
+	if hasTaps then
+		self:_emitTap("settled", {
+			action = info.action,
+			actor = info.actor,
+			remote = info.remote,
+			queuedAt = queuedAt,
+			startedAt = startedAt,
+			settledAt = clock(),
+			ok = type(result) == "table" and result.ok == true,
+			outcome = type(result) == "table" and result.name or nil,
+			result = result,
+		})
+	end
+
+	return result
+end
+
+function Runtime.cancelActor(self: any, actor: any, reason: any?): any
+	if self._asyncGate == nil then
+		return {
+			cancelledRuns = 0,
+			purgedWaiters = 0,
+		}
+	end
+
+	local gate: any = self._asyncGate
+	return gate:cancelActor(actor, reason)
 end
 
 function Runtime._remoteRequest(self: any, remoteName: string, bindOptions: any, player: any, payload: any): any
@@ -458,6 +697,9 @@ function Runtime.bindRemote(self: any, remoteName: string, remoteObject: any, op
 	local remoteAction: any = remoteOptions and remoteOptions.action
 	if remoteAction ~= nil and self:_asyncPolicy(remoteAction) ~= nil then
 		guardOptions.asyncGate = self:_gate()
+	end
+	guardOptions.pipeline = function(info: any, run: any): any
+		return self:_runPipeline(info, run)
 	end
 
 	local guardHandler: any = handler

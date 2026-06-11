@@ -73,6 +73,14 @@ local function record(diagnostics: any, fields: any)
 	end
 end
 
+local function failureResult(name: string, reason: string): any
+	return {
+		ok = false,
+		name = name,
+		reason = reason,
+	}
+end
+
 local function failure(name: string, reason: string, options: any): any
 	record(options.diagnostics, {
 		level = "error",
@@ -86,11 +94,7 @@ local function failure(name: string, reason: string, options: any): any
 		},
 	})
 
-	return {
-		ok = false,
-		name = name,
-		reason = reason,
-	}
+	return failureResult(name, reason)
 end
 
 function AsyncGate.token(): any
@@ -157,9 +161,16 @@ function AsyncGate._acquire(self: any, key: any, concurrency: string, options: a
 		return failure("ActionBusy", subject .. " is already running for this session", options)
 	end
 
-	table.insert(lock.queue, coroutine.running())
-	coroutine.yield()
+	table.insert(lock.queue, {
+		thread = coroutine.running(),
+		actor = options.actor,
+	})
+	local signal, signalReason = coroutine.yield()
 
+	if signal == "cancelled" then
+		local subject = tostring(options.action or options.remote or "action")
+		return failure("ActionCancelled", subject .. " cancelled while queued (" .. tostring(signalReason) .. ")", options)
+	end
 	if self._destroyed then
 		return failure("ActionCancelled", "async gate destroyed while queued", options)
 	end
@@ -178,24 +189,25 @@ function AsyncGate._release(self: any, key: any, concurrency: string)
 		return
 	end
 
-	local nextThread = table.remove(lock.queue, 1)
-	if nextThread == nil then
+	local nextEntry = table.remove(lock.queue, 1)
+	if nextEntry == nil then
 		self._locks[key] = nil
 		return
 	end
 
 	local spawnFn = self._scheduler.spawn :: (any) -> any
-	spawnFn(nextThread)
+	spawnFn(nextEntry.thread)
 end
 
-function AsyncGate._execute(self: any, options: any, fn: (any) -> any): any
+function AsyncGate._execute(self: any, options: any, fn: (any) -> any, releaseLock: () -> ()): (any, boolean)
 	local token = Token.new()
-	self._tokens[token] = true
 
 	local callerThread = coroutine.running()
 	local settled = false
 	local waiting = false
 	local syncResult = nil
+	local handlerDone = false
+	local timedOut = false
 
 	local function settle(result: any): boolean
 		if settled then
@@ -212,18 +224,44 @@ function AsyncGate._execute(self: any, options: any, fn: (any) -> any): any
 		return true
 	end
 
+	self._tokens[token] = {
+		settle = settle,
+		actor = options.actor,
+	}
+
 	local spawnFn = self._scheduler.spawn :: (any) -> any
 	spawnFn(function()
 		local ok, value = pcall(fn, token)
+		handlerDone = true
+
+		local delivered
 		if not ok then
-			settle(failure("ActionHandlerError", tostring(value), options))
-			return
+			delivered = settle(failure("ActionHandlerError", tostring(value), options))
+		else
+			delivered = settle(value)
 		end
-		settle(value)
+
+		if not delivered and timedOut then
+			-- The caller already received ActionTimeout and the lock was held
+			-- so this zombie could not race the session's next run.
+			local subject = tostring(options.action or options.remote or "action")
+			record(options.diagnostics, {
+				level = "warn",
+				category = "action",
+				system = options.system,
+				name = "ActionLateResult",
+				message = subject .. " finished after timing out; the late result was discarded",
+				context = {
+					action = options.action,
+					remote = options.remote,
+				},
+			})
+			releaseLock()
+		end
 	end)
 
 	if settled then
-		return syncResult
+		return syncResult, false
 	end
 
 	waiting = true
@@ -234,6 +272,7 @@ function AsyncGate._execute(self: any, options: any, fn: (any) -> any): any
 			if settled then
 				return
 			end
+			timedOut = true
 			token:cancel("timeout")
 			local subject = tostring(options.action or options.remote or "action")
 			settle(failure(
@@ -244,7 +283,11 @@ function AsyncGate._execute(self: any, options: any, fn: (any) -> any): any
 		end)
 	end
 
-	return coroutine.yield()
+	local result = coroutine.yield()
+	-- On timeout the still-running handler keeps the lock; it is released when
+	-- the handler finishes (see the spawn wrapper above). Every other settle
+	-- (natural, cancelActor, destroy) releases at return.
+	return result, timedOut and not handlerDone
 end
 
 function AsyncGate.run(self: any, key: any, options: any, fn: (any) -> any): any
@@ -269,8 +312,23 @@ function AsyncGate.run(self: any, key: any, options: any, fn: (any) -> any): any
 		return acquired
 	end
 
-	local result = self:_execute(runOptions, fn)
-	self:_release(key, concurrency)
+	if type(runOptions.onStarted) == "function" then
+		pcall(runOptions.onStarted)
+	end
+
+	local released = false
+	local function releaseLock()
+		if released then
+			return
+		end
+		released = true
+		self:_release(key, concurrency)
+	end
+
+	local result, releaseDeferred = self:_execute(runOptions, fn, releaseLock)
+	if not releaseDeferred then
+		releaseLock()
+	end
 	return result
 end
 
@@ -280,6 +338,68 @@ function AsyncGate.activeCount(self: any): number
 		count += 1
 	end
 	return count
+end
+
+function AsyncGate.cancelActor(self: any, actor: any, reason: any?): any
+	local summary = {
+		cancelledRuns = 0,
+		purgedWaiters = 0,
+	}
+	if self._destroyed or actor == nil then
+		return summary
+	end
+
+	local cancelReason = reason or "cancelled"
+
+	-- Purge queued waiters before settling in-flight runs: settling first would
+	-- release the lock and start the same actor's next queued run. Purge EVERY
+	-- lock before resuming any waiter: a resumed continuation can release
+	-- another lock (handing it to a waiter that should have been purged) or
+	-- re-enter the gate and grow _locks mid-traversal.
+	local purged: {any} = {}
+	for _, lock in pairs(self._locks) do
+		local kept: {any} = {}
+		for _, entry in ipairs(lock.queue) do
+			if entry.actor == actor then
+				table.insert(purged, entry)
+			else
+				table.insert(kept, entry)
+			end
+		end
+		lock.queue = kept
+	end
+
+	for _, entry in ipairs(purged) do
+		summary.purgedWaiters += 1
+		local spawnFn = self._scheduler.spawn :: (any, any, any) -> any
+		spawnFn(entry.thread, "cancelled", cancelReason)
+	end
+
+	-- Snapshot before settling: resumed callers re-enter gate code synchronously
+	-- and mutate _tokens mid-iteration.
+	local inFlight: {any} = {}
+	for token, entry in pairs(self._tokens) do
+		if entry.actor == actor then
+			table.insert(inFlight, {
+				token = token,
+				entry = entry,
+			})
+		end
+	end
+
+	for _, item in ipairs(inFlight) do
+		item.token:cancel(cancelReason)
+		-- No diagnostic here: the commit-boundary check in System.runAction
+		-- records ActionCancelled for in-flight runs. An earlier settle's
+		-- continuation may have settled this run naturally; settle reports
+		-- whether this call actually cancelled it.
+		local settled = item.entry.settle(failureResult("ActionCancelled", "action cancelled (" .. tostring(cancelReason) .. ")"))
+		if settled then
+			summary.cancelledRuns += 1
+		end
+	end
+
+	return summary
 end
 
 function AsyncGate.destroy(self: any)
@@ -294,9 +414,9 @@ function AsyncGate.destroy(self: any)
 	self._tokens = {}
 
 	for _, lock in pairs(self._locks) do
-		for _, thread in ipairs(lock.queue) do
+		for _, entry in ipairs(lock.queue) do
 			local spawnFn = self._scheduler.spawn :: (any) -> any
-			spawnFn(thread)
+			spawnFn(entry.thread)
 		end
 	end
 	self._locks = {}

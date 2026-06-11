@@ -204,7 +204,11 @@ back to the actor, then the action name):
 
 Timeouts cancel the call with an `ActionTimeout` diagnostic and a structured
 failure; the abandoned handler keeps running but its staged effects are
-discarded at the commit boundary with an `ActionCancelled` diagnostic. After a
+discarded at the commit boundary with an `ActionCancelled` diagnostic. The
+gate keeps holding the key's lock until the timed-out handler actually
+finishes, so the session's next `serialize`d run can never execute
+concurrently with the zombie; when the zombie completes, its discarded result
+is recorded as an `ActionLateResult` diagnostic and the lock releases. After a
 handler resumes from a yield, the lifecycle session revision is re-checked
 before effects apply, so a session that moved during the yield produces
 `LifecycleStaleRevision` and a rollback instead of a double commit.
@@ -246,7 +250,45 @@ scheduler.advance(10) -- fire pending timeouts in tests
 `implementYielding`, `callAsync`, `resume`, `pendingHandlerCount`, and
 `advance` for deterministic async tests.
 
+### Cancelling on Player Leave
+
+A player leaving mid-yield must not commit effects against their departed
+state. Wire `PlayerRemoving` to the runtime once:
+
+```lua
+local handle = Contracts.cancelOnLeave(runtime, game:GetService("Players"))
+-- handle.destroy() disconnects
+```
+
+When the player leaves, every in-flight async run for that actor is
+force-settled with an `ActionCancelled` failure and its queued duplicates are
+purged (each returns `ActionCancelled` with a recorded diagnostic). The
+abandoned handler keeps running, but the commit boundary discards its staged
+effects — a zombie handler can never commit. Force-settling releases the
+serialize lock, so later runs for the same key may start while the zombie
+unwinds; that is safe for the same reason.
+
+`runtime:cancelActor(actor, reason?)` is the underlying primitive and returns
+`{ cancelledRuns, purgedWaiters }`. It is a no-op (zeros) when no async action
+has ever run. Actor matching is by reference; custom actor objects must pass
+the same reference they invoked with. The adapter only covers runtime-managed
+gates: a standalone `RemoteGuard.connect` with its own `options.scheduler`
+creates a private gate that `cancelOnLeave` cannot reach.
+
 ## Transactional Effect Plans
+
+> **Only staged effects are transactional.** Immediate scope helpers
+> (`scope:write`, `scope:create`, `scope:destroy`, `scope:touch`) run their
+> writer **the moment they are called**, before output validation,
+> postconditions, lifecycle transitions, and the commit boundary. If the action
+> fails any of those later checks — or a post-commit `session:apply` rolls the
+> action back — an eager mutation that already ran **stays applied**; the SDK
+> cannot undo an arbitrary writer function. When this happens the SDK records an
+> `ActionEagerEffectsNotRolledBack` warning naming the orphaned effects, but the
+> state is still mutated. For anything that must be atomic with the action's
+> success (currency, inventory, anything a client could exploit a partial write
+> of), use `scope:stageWrite`/`stageCreate`/`stageDestroy` with a `rollback`
+> hook instead of `scope:write`.
 
 Immediate scope helpers such as `scope:write(...)` still run the given function
 immediately after permission checks. Use staged effects when a mutation should
@@ -424,6 +466,73 @@ print(report.implementedActions[1])
 print(report.boundRemotes[1])
 print(report.destroyed)
 ```
+
+### Action Taps
+
+Taps are read-only listeners for metrics, logging, and tracing. They cannot
+affect the outcome by construction:
+
+```lua
+local off = runtime:onAction({
+	started = function(event)
+		-- event.action, event.actor, event.remote, event.queuedAt, event.startedAt
+	end,
+	settled = function(event)
+		-- adds event.settledAt, event.ok, event.outcome, event.result
+		metrics:observe(event.action, event.settledAt - event.startedAt)
+	end,
+})
+-- off() unsubscribes
+```
+
+Semantics:
+
+- `started` fires when the handler actually begins (after the async gate
+  acquires); for queued `serialize` calls, `startedAt - queuedAt` is the queue
+  wait. Non-async actions start immediately, so `startedAt == queuedAt`.
+- `settled` fires for every pipeline outcome, including gate failures
+  (`ActionBusy`, `ActionTimeout`, `ActionCancelled`). A rejected duplicate
+  never starts, so `settled` can fire without a matching `started`
+  (`startedAt` is nil).
+- Taps fire for `runtime:invoke` and for remotes bound via
+  `runtime:bindRemote`, but not for pre-pipeline remote refusals (payload
+  validation, actor policy, rate limiting happen before the seam) and not for
+  standalone `RemoteGuard.connect`.
+- Listeners are pcall-isolated and dropped after their first error.
+  `event.result` is the live result table — do not mutate it.
+
+### Middleware
+
+Wrap middleware runs around the guarded pipeline and can veto an invocation,
+but can never bypass the contract:
+
+```lua
+local remove = runtime:use(function(ctx, next)
+	if tooBusy() then
+		return ctx:fail("ServerOverloaded", "shed load")
+	end
+	return next()
+end, {
+	actions = { "GrantItem" }, -- optional filter; omit for all actions
+})
+```
+
+`ctx` carries `action`, `actor`, `payload`, `remote`, a `locals` bag shared
+across the chain, and `validated` — `false` for `runtime:invoke` (the payload
+is raw; validation happens inside the pipeline) and `true` for remote-bound
+calls (the seam sits after payload validation). `ctx:fail(name, reason)`
+records a named diagnostic and produces the only failure object a middleware
+may return; calling it after `next()` is an error.
+
+A middleware must return either `next()`'s exact result or a `ctx:fail(...)`
+result. Anything else — including a forged result table — becomes
+`ActionMiddlewareInvalidResult`. A middleware that throws becomes
+`ActionMiddlewareError`; if it throws *after* `next()` ran, the action's
+effects are already committed and only the reported result changes, so do
+side-effectful work before `next()`, not after. Calling `next()` twice is an
+error. Wraps run in registration order (first registered is outermost) and sit
+outside the async gate, so `next()` duration includes queue wait — use tap
+timestamps to separate queueing from execution.
 
 ## Generated Remote Wrappers
 

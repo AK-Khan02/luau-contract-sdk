@@ -67,6 +67,10 @@ function Contracts.publishDiagnostics(diagnostics, options)
 	return Roblox.StudioBridgePublisher.publish(diagnostics, options)
 end
 
+function Contracts.cancelOnLeave(runtime, playersService)
+	return Roblox.PlayerCancellation.cancelOnLeave(runtime, playersService)
+end
+
 Contracts.any = Schema.any
 Contracts.arrayOf = Schema.arrayOf
 Contracts.boolean = Schema.boolean
