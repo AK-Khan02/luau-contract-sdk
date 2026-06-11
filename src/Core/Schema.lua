@@ -14,6 +14,22 @@ export type Schema = {
 
 local Schema: any = {}
 
+-- Default size ceilings so attacker-controlled fields on hot remotes cannot be
+-- used for unbounded allocation. Pass `false` per field to opt out, or a number
+-- to override.
+local DEFAULT_STRING_MAX_LENGTH = 4096
+local DEFAULT_ARRAY_MAX_ITEMS = 1024
+
+local function ceilingFrom(option: any, default: number): number?
+	if option == false then
+		return nil
+	end
+	if option == nil then
+		return default
+	end
+	return option
+end
+
 local function result(ok: boolean, reason: string?, value: any?, path: string?): ValidationResult
 	return {
 		ok = ok == true,
@@ -64,10 +80,11 @@ local function isVector3(value: any): boolean
 	return type(value) == "table" and isFiniteNumber(value.X) and isFiniteNumber(value.Y) and isFiniteNumber(value.Z)
 end
 
+-- Always compute from components. Table-form vectors arrive from RemoteEvents
+-- where the client controls every field, so a `Magnitude` field is spoofable
+-- and must never be trusted; the typeof("Vector3") path has no plain fields to
+-- spoof but is treated identically for consistency.
 local function vectorMagnitude(value: any): number
-	if value.Magnitude ~= nil then
-		return value.Magnitude
-	end
 	return math.sqrt(value.X * value.X + value.Y * value.Y + value.Z * value.Z)
 end
 
@@ -126,7 +143,7 @@ function Schema.string(options: any?): Schema
 	return {
 		kind = "string",
 		minLength = options.minLength,
-		maxLength = options.maxLength,
+		maxLength = ceilingFrom(options.maxLength, DEFAULT_STRING_MAX_LENGTH),
 		pattern = options.pattern,
 		description = options.description,
 	}
@@ -172,10 +189,12 @@ function Schema.optional(schema: any): Schema
 	}
 end
 
-function Schema.arrayOf(schema: any): Schema
+function Schema.arrayOf(schema: any, options: any?): Schema
+	options = options or {}
 	return {
 		kind = "array",
 		schema = schema,
+		maxItems = ceilingFrom(options.maxItems, DEFAULT_ARRAY_MAX_ITEMS),
 	}
 end
 
@@ -291,6 +310,12 @@ function validators.array(schema: Schema, value: any, path: string?): Validation
 		return fail(path, "expected array")
 	end
 
+	-- Bound the size before validating elements so an oversized array is
+	-- rejected without paying to validate every entry.
+	if schema.maxItems ~= nil and #value > schema.maxItems then
+		return fail(path, "expected array length <= " .. tostring(schema.maxItems))
+	end
+
 	for index, child in ipairs(value) do
 		local childResult = Schema.validate(schema.schema, child, childPath(path, index))
 		if not childResult.ok then
@@ -306,8 +331,11 @@ function validators.object(schema: Schema, value: any, path: string?): Validatio
 		return fail(path, "expected object")
 	end
 
+	-- Read shape fields with rawget so a metatable's __index cannot spoof a
+	-- field that the raw table does not contain. The extra-key sweep below also
+	-- iterates the raw table (pairs), so both halves agree on what is present.
 	for key, childSchema in pairs(schema.shape) do
-		local childResult = Schema.validate(childSchema, value[key], childPath(path, key))
+		local childResult = Schema.validate(childSchema, rawget(value, key), childPath(path, key))
 		if not childResult.ok then
 			return childResult
 		end
@@ -343,6 +371,13 @@ function validators.vector3(schema: Schema, value: any, path: string?): Validati
 		if schema.maxMagnitude ~= nil and magnitude > schema.maxMagnitude then
 			return fail(path, "expected vector magnitude <= " .. tostring(schema.maxMagnitude))
 		end
+	end
+
+	-- Normalize table-form vectors to just the components so spoofed sibling
+	-- fields (Magnitude, Unit, arbitrary keys) never reach handlers. Real
+	-- Vector3 userdata has no spoofable fields and passes through untouched.
+	if type(value) == "table" then
+		return result(true, nil, { X = value.X, Y = value.Y, Z = value.Z }, path)
 	end
 
 	return result(true, nil, value, path)
@@ -429,6 +464,7 @@ function Schema.describe(schema: any): any
 		return {
 			kind = "array",
 			schema = Schema.describe(schema.schema),
+			maxItems = schema.maxItems,
 		}
 	end
 	if schema.kind == "object" then

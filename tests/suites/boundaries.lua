@@ -22,6 +22,43 @@ return function(test)
 	test:expect("unconstrained string accepts empty", Schema.validate(Schema.string(), "").ok, true)
 	test:expect("string rejects numbers", Schema.validate(Schema.string(), 5).ok, false)
 
+	-- Unconstrained strings must still carry a DoS ceiling: attacker-controlled
+	-- hot remotes cannot be allowed unbounded allocation.
+	local defaultString = Schema.string()
+	test:expect("default string has a maxLength ceiling", type(defaultString.maxLength), "number")
+	test:expect("string under default ceiling passes",
+		Schema.validate(defaultString, string.rep("a", defaultString.maxLength)).ok, true)
+	test:expect("string over default ceiling fails",
+		Schema.validate(defaultString, string.rep("a", defaultString.maxLength + 1)).ok, false)
+	test:expect("maxLength = false opts out of the ceiling",
+		Schema.string({ maxLength = false }).maxLength, nil)
+	test:expect("explicit maxLength overrides the default",
+		Schema.string({ maxLength = 5 }).maxLength, 5)
+
+	test:section("Schema array boundaries")
+
+	local defaultArray = Schema.arrayOf(Schema.number())
+	test:expect("default array has a maxItems ceiling", type(defaultArray.maxItems), "number")
+	local function numbers(count)
+		local out = {}
+		for index = 1, count do
+			out[index] = index
+		end
+		return out
+	end
+	test:expect("array at default ceiling passes",
+		Schema.validate(defaultArray, numbers(defaultArray.maxItems)).ok, true)
+	local oversized = Schema.validate(defaultArray, numbers(defaultArray.maxItems + 1))
+	test:expect("array over default ceiling fails", oversized.ok, false)
+	test:expectMatch("array ceiling failure names the limit", oversized.reason,
+		"expected array length <= " .. tostring(defaultArray.maxItems))
+	test:expect("maxItems = false opts out of the ceiling",
+		Schema.arrayOf(Schema.number(), { maxItems = false }).maxItems, nil)
+	local capped = Schema.arrayOf(Schema.number(), { maxItems = 2 })
+	test:expect("explicit maxItems is honored", Schema.validate(capped, { 1, 2 }).ok, true)
+	test:expect("explicit maxItems rejects overflow", Schema.validate(capped, { 1, 2, 3 }).ok, false)
+	test:expect("array describe carries maxItems", Schema.describe(capped).maxItems, 2)
+
 	test:section("Schema stringId edge inputs")
 
 	local id = Contracts.stringId()
@@ -69,15 +106,30 @@ return function(test)
 	test:expect("unitish rejects the zero vector", zeroVector.ok, false)
 	test:expectMatch("unitish failure says unit-ish", zeroVector.reason, "expected unit-ish vector")
 	test:expect("non-finite component is not Vector3-like", Schema.validate(unitish, { X = math.huge, Y = 0, Z = 0 }).ok, false)
-	local hugeMagnitude = Schema.validate(unitish, { X = 1, Y = 0, Z = 0, Magnitude = math.huge })
-	test:expect("non-finite Magnitude field fails", hugeMagnitude.ok, false)
-	test:expectMatch("non-finite magnitude failure is specific", hugeMagnitude.reason, "expected finite vector magnitude")
+
+	-- RemoteEvents deliver plain tables, so a client can attach a Magnitude
+	-- field. Magnitude must be computed from the components, never trusted.
+	local spoofedHuge = Schema.validate(unitish, { X = 1, Y = 0, Z = 0, Magnitude = math.huge })
+	test:expect("spoofed Magnitude field is ignored; computed magnitude is unit-ish", spoofedHuge.ok, true)
 
 	local ranged3 = Schema.vector3({ minMagnitude = 2, maxMagnitude = 4 })
 	test:expect("vector at minMagnitude passes", Schema.validate(ranged3, { X = 2, Y = 0, Z = 0 }).ok, true)
 	test:expect("vector at maxMagnitude passes", Schema.validate(ranged3, { X = 4, Y = 0, Z = 0 }).ok, true)
 	test:expect("vector below minMagnitude fails", Schema.validate(ranged3, { X = 1.999, Y = 0, Z = 0 }).ok, false)
 	test:expect("vector above maxMagnitude fails", Schema.validate(ranged3, { X = 4.001, Y = 0, Z = 0 }).ok, false)
+
+	-- The classic exploit: a spoofed Magnitude under the cap while the real
+	-- components are enormous. Must fail on the computed magnitude.
+	local spoofedSmall = Schema.validate(ranged3, { X = 1e6, Y = 0, Z = 0, Magnitude = 3 })
+	test:expect("spoofed small Magnitude cannot defeat maxMagnitude", spoofedSmall.ok, false)
+	test:expectMatch("spoofed magnitude fails on the computed value", spoofedSmall.reason, "magnitude <= 4")
+
+	-- Spoofed fields must not survive into the normalized value either.
+	local sanitized = Schema.validate(ranged3, { X = 3, Y = 0, Z = 0, Magnitude = 3, evil = true })
+	test:expect("table-form vector validates on components", sanitized.ok, true)
+	test:expect("normalized vector drops the spoofed Magnitude field", sanitized.value.Magnitude, nil)
+	test:expect("normalized vector drops unknown fields", sanitized.value.evil, nil)
+	test:expect("normalized vector keeps X", sanitized.value.X, 3)
 
 	test:section("Schema custom validators")
 
@@ -130,6 +182,26 @@ return function(test)
 	test:expect("empty strict object rejects any field", Schema.validate(Schema.object({}), { x = 1 }).ok, false)
 	test:expect("object rejects non-tables", Schema.validate(strictObject, "nope").ok, false)
 	test:expect("array-like table fails shaped object", Schema.validate(strictObject, { "Rifle" }).ok, false)
+
+	-- A metatable must not be able to spoof required fields. Shape reads and the
+	-- extra-key sweep must both see only the raw table, so a field supplied by
+	-- __index (not actually present) cannot satisfy validation.
+	local privileged = Schema.object({
+		Admin = Contracts.boolean(),
+	}, { allowExtra = false })
+	local spoofed = setmetatable({}, {
+		__index = function(_, key)
+			if key == "Admin" then
+				return true
+			end
+			return nil
+		end,
+	})
+	local spoofResult = Schema.validate(privileged, spoofed)
+	test:expect("metatable-spoofed required field does not satisfy the shape", spoofResult.ok, false)
+	test:expectMatch("spoof failure names the missing field", spoofResult.reason, "Admin")
+	-- A genuine raw field still validates through the same path.
+	test:expect("genuine raw field validates", Schema.validate(privileged, { Admin = true }).ok, true)
 
 	test:section("Diagnostics capacity boundaries")
 

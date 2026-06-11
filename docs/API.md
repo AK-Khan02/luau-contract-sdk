@@ -911,12 +911,26 @@ Supported schema builders:
 - `Contracts.oneOf(values)`
 - `Contracts.literal(value)`
 - `Contracts.optional(schema)`
-- `Contracts.arrayOf(schema)`
+- `Contracts.arrayOf(schema, { maxItems })`
 - `Contracts.object(shape, { allowExtra })`
 - `Contracts.vector3({ unitish, minMagnitude, maxMagnitude })`
 - `Contracts.custom(name, validator)`
 
 All validators return `{ ok, reason, value, path }`.
+
+### Default size ceilings
+
+Because remotes carry attacker-controlled payloads, `string` and `arrayOf`
+apply a default upper bound so a hot remote cannot be used for unbounded
+allocation: strings default to `maxLength = 4096` and arrays to
+`maxItems = 1024`. Pass an explicit number to raise or lower the bound, or
+`false` to opt out entirely (`Contracts.string({ maxLength = false })`,
+`Contracts.arrayOf(schema, { maxItems = false })`). Oversized arrays are
+rejected before their elements are validated. `vector3` always computes
+magnitude from the `X`/`Y`/`Z` components and discards any client-supplied
+`Magnitude` (or other) fields, so a spoofed magnitude cannot defeat
+`maxMagnitude`/`unitish`; table-form vectors normalize to a clean
+`{ X, Y, Z }`.
 
 `Contracts.Schema.describe(schema)` returns a serializable schema description.
 Custom schemas report as `{ kind = "custom", name = "..." }` without exposing
