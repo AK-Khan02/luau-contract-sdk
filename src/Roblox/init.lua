@@ -12,6 +12,7 @@ return {
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
 	PlayerCancellation = load("./PlayerCancellation", "./Roblox/PlayerCancellation"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
+	RelayPublisher = load("./RelayPublisher", "./Roblox/RelayPublisher"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),
 	StudioBridgePublisher = load("./StudioBridgePublisher", "./Roblox/StudioBridgePublisher"),
 	TaskScheduler = load("./TaskScheduler", "./Roblox/TaskScheduler"),

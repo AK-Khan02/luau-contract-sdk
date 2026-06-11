@@ -71,6 +71,10 @@ function Contracts.cancelOnLeave(runtime, playersService)
 	return Roblox.PlayerCancellation.cancelOnLeave(runtime, playersService)
 end
 
+function Contracts.publishRelay(diagnostics, options)
+	return Roblox.RelayPublisher.publish(diagnostics, options)
+end
+
 Contracts.any = Schema.any
 Contracts.arrayOf = Schema.arrayOf
 Contracts.boolean = Schema.boolean

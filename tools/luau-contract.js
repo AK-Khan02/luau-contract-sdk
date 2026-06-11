@@ -37,6 +37,7 @@ Usage:
   luau-contract migrate suggest [options]
   luau-contract migrate patch [options]
   luau-contract migrate contract [options]
+  luau-contract tail --endpoint <url> [options]
 
 Options:
   --root <path>              Project root to scan. Defaults to cwd.
@@ -64,6 +65,11 @@ Options:
   --system-name <name>       System name for migrate contract drafts.
   --strict-payload           Migration patches reject extra payload fields.
   --luau <path>              Luau executable. Defaults to luau.
+  --endpoint <url>           Relay server base URL for tail.
+  --api-key <key>            Relay API key sent as x-api-key.
+  --since <seq>              Start tailing after this relay sequence number.
+  --interval <seconds>       Poll interval for tail. Defaults to 2.
+  --once                     Tail once and exit instead of polling.
   --help                     Show this help.
 `;
 }
@@ -114,6 +120,11 @@ function parseArgs(argv) {
 		systemName: null,
 		strictPayload: false,
 		luauPath: "luau",
+		endpoint: null,
+		apiKey: null,
+		since: 0,
+		intervalSeconds: 2,
+		once: false,
 		help: false,
 	};
 
@@ -203,6 +214,20 @@ function parseArgs(argv) {
 		} else if (flag === "--luau") {
 			options.luauPath = value || takeValue(args, index, flag);
 			if (value == null) index += 1;
+		} else if (flag === "--endpoint") {
+			options.endpoint = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--api-key") {
+			options.apiKey = value || takeValue(args, index, flag);
+			if (value == null) index += 1;
+		} else if (flag === "--since") {
+			options.since = Number(value || takeValue(args, index, flag));
+			if (value == null) index += 1;
+		} else if (flag === "--interval") {
+			options.intervalSeconds = Number(value || takeValue(args, index, flag));
+			if (value == null) index += 1;
+		} else if (flag === "--once") {
+			options.once = true;
 		} else {
 			throw new Error(`Unknown option: ${arg}`);
 		}
@@ -501,6 +526,103 @@ async function runMigrate(options) {
 	return 0;
 }
 
+function formatRelayEntry(serverId, entry) {
+	const parts = [`[${entry.level || "info"}]`];
+	if (serverId != null) {
+		parts.push(`${serverId}`);
+	}
+	if (entry.system != null) {
+		parts.push(`${entry.system}`);
+	}
+	parts.push(`${entry.name || entry.code || "Diagnostic"}`);
+	const prefix = parts.join(" ");
+	return entry.message != null ? `${prefix}: ${entry.message}` : prefix;
+}
+
+async function fetchTail(options, since) {
+	const url = new URL("/tail", options.endpoint);
+	url.searchParams.set("since", String(since));
+	const headers = {};
+	if (options.apiKey != null) {
+		headers["x-api-key"] = options.apiKey;
+	}
+
+	const response = await fetch(url, { headers });
+	if (response.status === 401) {
+		throw new Error("relay rejected the API key (401)");
+	}
+	if (!response.ok) {
+		throw new Error(`relay returned status ${response.status}`);
+	}
+	return response.json();
+}
+
+function isRecordObject(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The endpoint is caller-supplied and may not be a relay at all; treat the
+// payload as untrusted and skip records that do not match the wire shape.
+function printTailPage(page) {
+	if (!isRecordObject(page) || !Array.isArray(page.batches)) {
+		throw new Error("relay returned an unexpected payload");
+	}
+	if (page.dropped > 0) {
+		process.stdout.write(`-- relay dropped ${page.dropped} batch(es) before this point --\n`);
+	}
+	for (const record of page.batches) {
+		if (!isRecordObject(record) || !isRecordObject(record.batch)) {
+			continue;
+		}
+		const entries = Array.isArray(record.batch.entries) ? record.batch.entries : [];
+		for (const entry of entries) {
+			if (isRecordObject(entry)) {
+				process.stdout.write(`${formatRelayEntry(record.serverId, entry)}\n`);
+			}
+		}
+	}
+}
+
+async function runTail(options) {
+	if (typeof options.endpoint !== "string" || options.endpoint === "") {
+		throw new Error("tail requires --endpoint");
+	}
+	if (!Number.isInteger(options.since) || options.since < 0) {
+		throw new Error("--since must be a non-negative integer");
+	}
+	if (!Number.isFinite(options.intervalSeconds) || options.intervalSeconds <= 0) {
+		throw new Error("--interval must be a positive number");
+	}
+
+	let since = options.since;
+
+	if (options.once) {
+		try {
+			printTailPage(await fetchTail(options, since));
+		} catch (error) {
+			process.stderr.write(`tail: ${error.message}\n`);
+			return 1;
+		}
+		return 0;
+	}
+
+	process.stderr.write(`tailing ${options.endpoint} (every ${options.intervalSeconds}s, since ${since})\n`);
+	for (;;) {
+		try {
+			const page = await fetchTail(options, since);
+			printTailPage(page);
+			if (Number.isInteger(page.latest)) {
+				since = Math.max(since, page.latest);
+			}
+		} catch (error) {
+			process.stderr.write(`tail: ${error.message}\n`);
+		}
+		await new Promise((resolve) => {
+			setTimeout(resolve, options.intervalSeconds * 1000);
+		});
+	}
+}
+
 async function main(argv) {
 	const options = parseArgs(argv);
 	if (options.help) {
@@ -522,6 +644,9 @@ async function main(argv) {
 		}
 		if (options.command === "migrate") {
 			return runMigrate(options);
+		}
+		if (options.command === "tail") {
+			return runTail(options);
 		}
 		throw new Error(`Unknown command: ${options.command}`);
 	}

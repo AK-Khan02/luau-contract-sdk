@@ -11,6 +11,7 @@ local suites = {
 	{ name = "remote_policies_reports", run = require("./suites/remote_policies_reports") },
 	{ name = "runtime", run = require("./suites/runtime") },
 	{ name = "middleware", run = require("./suites/middleware") },
+	{ name = "relay_publisher", run = require("./suites/relay_publisher") },
 	{ name = "async_actions", run = require("./suites/async_actions") },
 	{ name = "test_harness", run = require("./suites/test_harness") },
 	{ name = "adapters_examples", run = require("./suites/adapters_examples") },

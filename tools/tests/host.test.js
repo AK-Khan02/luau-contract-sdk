@@ -910,3 +910,241 @@ test("cli scan reports generated wrapper and attack-test coverage", () => {
 		fs.rmSync(outDir, { force: true, recursive: true });
 	}
 });
+
+test("relay envelope validation pins the wire shape", () => {
+	const { envelopeError } = require("../relay/server");
+	assert.equal(envelopeError({ v: 1, batches: [{ entries: [] }] }), null);
+	assert.equal(envelopeError({ v: 1 }), null);
+	assert.match(envelopeError(null), /object/);
+	assert.match(envelopeError([]), /object/);
+	assert.match(envelopeError({ batches: "x" }), /array/);
+	assert.match(envelopeError({ batches: [null] }), /batch objects/);
+});
+
+test("relay ring buffer assigns sequences and reports drops", () => {
+	const { createRelayState, ingest, tail } = require("../relay/server");
+	const state = createRelayState(2);
+
+	ingest(state, { v: 1, serverId: "srv-1", batches: [{ v: 1, seq: 1, entries: [] }] });
+	ingest(state, { v: 1, serverId: "srv-1", batches: [{ v: 1, seq: 2, entries: [] }, { v: 1, seq: 3, entries: [] }] });
+
+	const page = tail(state, 0);
+	assert.equal(page.latest, 3);
+	assert.equal(page.dropped, 1);
+	assert.equal(page.batches.length, 2);
+	assert.equal(page.batches[0].serverSeq, 2);
+
+	const caughtUp = tail(state, 3);
+	assert.equal(caughtUp.batches.length, 0);
+	assert.equal(caughtUp.dropped, 0);
+});
+
+function startRelayServer(extraArgs) {
+	const { spawn } = require("node:child_process");
+	const server = spawn(process.execPath, [
+		path.join(repoRoot, "tools/relay/server.js"),
+		"--port",
+		"0",
+		...extraArgs,
+	], {
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	const port = new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error("relay server did not start")), 5000);
+		let buffer = "";
+		server.stdout.on("data", (chunk) => {
+			buffer += chunk.toString();
+			const match = /relay listening on (\d+)/.exec(buffer);
+			if (match) {
+				clearTimeout(timer);
+				resolve(Number(match[1]));
+			}
+		});
+		server.on("error", reject);
+	});
+	return { server, port };
+}
+
+test("relay server end to end with auth and CLI tail", async () => {
+	const { server, port } = startRelayServer(["--api-key", "hunter2"]);
+
+	try {
+		const base = `http://127.0.0.1:${await port}`;
+
+		const unauthorized = await fetch(`${base}/ingest`, { method: "POST", body: "{}" });
+		assert.equal(unauthorized.status, 401);
+
+		const badJson = await fetch(`${base}/ingest`, {
+			method: "POST",
+			headers: { "x-api-key": "hunter2" },
+			body: "{nope",
+		});
+		assert.equal(badJson.status, 400);
+
+		const envelope = {
+			v: 1,
+			serverId: "srv-1",
+			placeVersion: 7,
+			relayDropped: 0,
+			batches: [{
+				v: 1,
+				seq: 1,
+				entries: [{
+					level: "error",
+					system: "InventoryService",
+					name: "RemoteRateLimited",
+					message: "too fast",
+				}],
+			}],
+		};
+		const ingested = await fetch(`${base}/ingest`, {
+			method: "POST",
+			headers: { "x-api-key": "hunter2", "content-type": "application/json" },
+			body: JSON.stringify(envelope),
+		});
+		assert.equal(ingested.status, 200);
+		const ingestBody = await ingested.json();
+		assert.equal(ingestBody.accepted, 1);
+		assert.equal(ingestBody.latest, 1);
+
+		const health = await (await fetch(`${base}/health`)).json();
+		assert.equal(health.ok, true);
+		assert.equal(health.count, 1);
+
+		const page = await (await fetch(`${base}/tail?since=0`, {
+			headers: { "x-api-key": "hunter2" },
+		})).json();
+		assert.equal(page.latest, 1);
+		assert.equal(page.dropped, 0);
+		assert.equal(page.batches[0].batch.entries[0].name, "RemoteRateLimited");
+
+		const tailRun = spawnSync(process.execPath, [
+			cliPath,
+			"tail",
+			"--endpoint",
+			base,
+			"--api-key",
+			"hunter2",
+			"--once",
+		], { encoding: "utf8" });
+		assert.equal(tailRun.status, 0, tailRun.stderr || tailRun.stdout);
+		assert.match(tailRun.stdout, /\[error\] srv-1 InventoryService RemoteRateLimited: too fast/);
+
+		const deniedRun = spawnSync(process.execPath, [
+			cliPath,
+			"tail",
+			"--endpoint",
+			base,
+			"--api-key",
+			"wrong",
+			"--once",
+		], { encoding: "utf8" });
+		assert.equal(deniedRun.status, 1);
+		assert.match(deniedRun.stderr, /401/);
+
+		const missingEndpoint = spawnSync(process.execPath, [cliPath, "tail", "--once"], { encoding: "utf8" });
+		assert.equal(missingEndpoint.status, 2);
+		assert.match(missingEndpoint.stderr, /requires --endpoint/);
+	} finally {
+		server.kill();
+	}
+});
+
+function serveJson(payload) {
+	const http = require("node:http");
+	const server = http.createServer((request, response) => {
+		const body = JSON.stringify(payload);
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(body);
+	});
+	return new Promise((resolve) => {
+		server.listen(0, "127.0.0.1", () => resolve({
+			server,
+			base: `http://127.0.0.1:${server.address().port}`,
+		}));
+	});
+}
+
+// spawnSync would block the event loop and deadlock against in-process servers.
+function runCliAsync(args) {
+	const { spawn } = require("node:child_process");
+	return new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, [cliPath, ...args], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		child.stdout.on("data", (chunk) => {
+			stdout += chunk.toString();
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+		});
+		child.on("error", reject);
+		child.on("close", (status) => resolve({ status, stdout, stderr }));
+	});
+}
+
+test("cli tail reports malformed relay payloads without crashing", async () => {
+	const bogus = await serveJson({ unexpected: true });
+	try {
+		const run = await runCliAsync(["tail", "--endpoint", bogus.base, "--once"]);
+		assert.equal(run.status, 1, run.stderr || run.stdout);
+		assert.match(run.stderr, /tail: relay returned an unexpected payload/);
+		assert.doesNotMatch(run.stderr, /TypeError/);
+	} finally {
+		bogus.server.close();
+	}
+
+	const junky = await serveJson({
+		ok: true,
+		latest: 3,
+		dropped: 0,
+		batches: [
+			null,
+			{ serverId: "srv-1", batch: null },
+			{ serverId: "srv-1", batch: { entries: [null, { level: "error", name: "Survivor", message: "kept" }] } },
+		],
+	});
+	try {
+		const run = await runCliAsync(["tail", "--endpoint", junky.base, "--once"]);
+		assert.equal(run.status, 0, run.stderr || run.stdout);
+		assert.match(run.stdout, /\[error\] srv-1 Survivor: kept/);
+	} finally {
+		junky.server.close();
+	}
+});
+
+test("relay server rejects malformed envelopes and stays alive", async () => {
+	const { server, port } = startRelayServer([]);
+
+	try {
+		const base = `http://127.0.0.1:${await port}`;
+		const headers = { "content-type": "application/json" };
+
+		for (const body of ["null", "123", "\"text\"", "true", "[]"]) {
+			const response = await fetch(`${base}/ingest`, { method: "POST", headers, body });
+			assert.equal(response.status, 400, `expected 400 for envelope ${body}`);
+		}
+
+		const badBatchBodies = [
+			{ v: 1, serverId: "srv-1", batches: "nope" },
+			{ v: 1, serverId: "srv-1", batches: [null] },
+			{ v: 1, serverId: "srv-1", batches: [{ v: 1, seq: 1, entries: [] }, 7] },
+		];
+		for (const envelope of badBatchBodies) {
+			const response = await fetch(`${base}/ingest`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(envelope),
+			});
+			assert.equal(response.status, 400, `expected 400 for batches ${JSON.stringify(envelope.batches)}`);
+		}
+
+		const health = await (await fetch(`${base}/health`)).json();
+		assert.equal(health.ok, true);
+		assert.equal(health.count, 0);
+	} finally {
+		server.kill();
+	}
+});

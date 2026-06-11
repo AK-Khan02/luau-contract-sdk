@@ -1004,6 +1004,55 @@ the Roblox writer is `Contracts.Roblox.StudioBridgePublisher`; both accept
 `maxBatchEntries`, `flushIntervalSeconds`, `maxContextDepth`, and `clock`
 overrides.
 
+## HTTP Diagnostics Relay
+
+Live production servers stream the same versioned batches to an HTTP relay so
+contract violations are visible outside the game:
+
+```lua
+Contracts.publishRelay(runtime:diagnostics(), {
+	endpoint = "https://relay.example.com/ingest",
+	apiKey = secretsService:GetSecret("relay-key"), -- sent as x-api-key, never stringified
+	level = "error", -- default "error" (stricter than the Studio publisher)
+})
+```
+
+The publisher enqueues batches synchronously (recording a diagnostic never
+performs HTTP mid-action) and a Heartbeat pump sends them: one in-flight POST
+at a time, queued batches coalesced into a single envelope
+`{ v = 1, serverId, placeVersion, relayDropped, batches }` where each batch is
+byte-identical to the Studio bridge wire format. Delivery policy:
+
+- pcall failures, 5xx, and 429 retry with capped exponential backoff
+  (1s → 30s, 5 attempts, then drop and count);
+- 400 and 403 drop without retry; three consecutive 401s latch the publisher
+  off (`stats().disabled`);
+- every physical POST counts against `maxRequestsPerMinute` (default 30); when
+  exhausted the pump idles until the window rolls;
+- the outbox caps at `maxOutbox` (default 50) batches, evicting oldest and
+  counting drops.
+
+Relay failures are never recorded into the relayed diagnostics (no feedback
+loop); inspect `handle.stats()` instead. `handle.drain(timeoutSeconds)` flushes
+on `game:BindToClose`. The publisher no-ops in Studio unless `studio = true`.
+By default it resolves `HttpService`, `RunService`, `game.JobId`, and
+`game.PlaceVersion`; all are injectable for tests (`httpService`, `runService`,
+`scheduler`, `clock`, `serverId`, `placeVersion`).
+
+A reference relay server ships in `tools/relay/server.js` (Node stdlib only):
+`POST /ingest` (authenticated, 1 MB body cap), `GET /tail?since=<seq>` (returns
+`{ batches, latest, dropped }` from a ring buffer), and `GET /health`. Watch a
+live server from a terminal:
+
+```sh
+node tools/relay/server.js --port 8787 --api-key hunter2
+node tools/luau-contract.js tail --endpoint http://127.0.0.1:8787 --api-key hunter2
+```
+
+`tail` polls every `--interval` seconds (default 2), resumes from `--since`,
+prints a notice when the ring buffer dropped batches, and supports `--once`
+for scripted checks.
+
 ## Overlay Feed
 
 ```lua
