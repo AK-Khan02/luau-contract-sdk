@@ -911,6 +911,12 @@ test("cli scan reports generated wrapper and attack-test coverage", () => {
 	}
 });
 
+test("studio plugin shell calls real plugin APIs", () => {
+	const source = fs.readFileSync(path.join(repoRoot, "plugin/LuauContractStudioPlugin.lua"), "utf8");
+	assert.match(source, /plugin:CreateDockWidgetPluginGui\(/);
+	assert.doesNotMatch(source, /CreateDockWidgetPluginGuiAsync/);
+});
+
 test("relay envelope validation pins the wire shape", () => {
 	const { envelopeError } = require("../relay/server");
 	assert.equal(envelopeError({ v: 1, batches: [{ entries: [] }] }), null);

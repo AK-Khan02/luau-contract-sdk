@@ -40,7 +40,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 	360
 )
 
-local widget = plugin:CreateDockWidgetPluginGuiAsync("LuauContractSDKPanel", widgetInfo)
+local widget = plugin:CreateDockWidgetPluginGui("LuauContractSDKPanel", widgetInfo)
 widget.Title = "Luau Contracts"
 
 local root = Instance.new("Frame")
