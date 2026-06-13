@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local Ownership = require("../../src/Roblox/Ownership")
@@ -20,12 +20,15 @@ return function(test)
 		:mayRead("Player.Character")
 		:mayWrite("Player.Backpack")
 		:mustNeverTouch("Workspace.CurrentArena")
-		:remote("WeaponAction", Contracts.object({
-			Action = Contracts.oneOf({ "Fire", "Reload" }),
-			WeaponId = Contracts.stringId(),
-		}, {
-			allowExtra = false,
-		}))
+		:remote(
+			"WeaponAction",
+			Contracts.object({
+				Action = Contracts.oneOf({ "Fire", "Reload" }),
+				WeaponId = Contracts.stringId(),
+			}, {
+				allowExtra = false,
+			})
+		)
 		:postcondition("PlayerHasWeapon", function(context)
 			return context.weaponCount == 1
 		end)
@@ -46,7 +49,7 @@ return function(test)
 
 	local guardDiagnostics = Contracts.diagnostics()
 	local handledPayload = nil
-	RemoteGuard.connect(weaponContract, "WeaponAction", fakeRemote, function(player, payload)
+	RemoteGuard.connect(weaponContract, "WeaponAction", fakeRemote, function(_player, payload)
 		handledPayload = payload
 	end, {
 		diagnostics = guardDiagnostics,
@@ -150,12 +153,21 @@ return function(test)
 	local wrongOwner = Ownership.assertOwned("MapService", fakeInstance, ownershipDiagnostics)
 	check("ownership rejects wrong owner", wrongOwner == false)
 	check("ownership records wrong owner", ownershipDiagnostics:last().name == "UnownedObjectTouch")
-	check("ownership destroys owned instance", Ownership.destroyOwned("CombatService", fakeInstance) == true and fakeInstance.destroyed == true)
+	check(
+		"ownership destroys owned instance",
+		Ownership.destroyOwned("CombatService", fakeInstance) == true and fakeInstance.destroyed == true
+	)
 
 	local runnerDiagnostics = Contracts.diagnostics()
-	local runnerResult = PostconditionRunner.run(weaponContract, "give weapon", { weaponCount = 1 }, runnerDiagnostics, function()
-		return "done"
-	end)
+	local runnerResult = PostconditionRunner.run(
+		weaponContract,
+		"give weapon",
+		{ weaponCount = 1 },
+		runnerDiagnostics,
+		function()
+			return "done"
+		end
+	)
 	check("postcondition runner returns action value", runnerResult.ok == true and runnerResult.value == "done")
 
 	local failedRunnerResult = PostconditionRunner.run(
@@ -173,9 +185,24 @@ return function(test)
 	local overlayFeed = Contracts.OverlayFeed.new(overlayDiagnostics, {
 		maxRows = 2,
 	})
-	overlayDiagnostics:record({ level = "warn", system = "MapService", name = "BroadCleanup", message = "broad cleanup" })
-	overlayDiagnostics:record({ level = "error", system = "CombatService", name = "MissingWeapon", message = "missing weapon" })
-	overlayDiagnostics:record({ level = "info", system = "SpawnService", name = "SpawnStarted", message = "spawn started" })
+	overlayDiagnostics:record({
+		level = "warn",
+		system = "MapService",
+		name = "BroadCleanup",
+		message = "broad cleanup",
+	})
+	overlayDiagnostics:record({
+		level = "error",
+		system = "CombatService",
+		name = "MissingWeapon",
+		message = "missing weapon",
+	})
+	overlayDiagnostics:record({
+		level = "info",
+		system = "SpawnService",
+		name = "SpawnStarted",
+		message = "spawn started",
+	})
 	check("overlay feed keeps max rows", #overlayFeed:rows() == 2)
 	check("overlay feed exposes latest row", overlayFeed:latest().name == "SpawnStarted")
 	check("overlay feed formats text", string.find(overlayFeed:text(), "MissingWeapon", 1, true) ~= nil)
@@ -253,7 +280,8 @@ return function(test)
 	)
 	check(
 		"checkpoint example rejects extra remote field",
-		CheckpointContract:validateRemote("ActivateCheckpoint", { CheckpointId = "Checkpoint_1", Admin = true }).ok == false
+		CheckpointContract:validateRemote("ActivateCheckpoint", { CheckpointId = "Checkpoint_1", Admin = true }).ok
+			== false
 	)
 
 	local fakeCheckpointPlayer = {
@@ -273,7 +301,7 @@ return function(test)
 		payload = {
 			ItemId = "Rifle",
 		},
-		findEquippedItem = function(player, itemId)
+		findEquippedItem = function(_player, itemId)
 			if equippedItems[itemId] then
 				return itemId
 			end

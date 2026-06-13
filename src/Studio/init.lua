@@ -1,3 +1,5 @@
+--!nonstrict
+
 local function load(primaryPath, fallbackPath)
 	local ok, module = pcall(require, primaryPath)
 	if ok then

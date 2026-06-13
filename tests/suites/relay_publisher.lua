@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local RelayPublisher = require("../../src/Roblox/RelayPublisher")
@@ -74,11 +74,18 @@ return function(test)
 		scheduler = ManualScheduler.new(),
 	})
 	check("publish is a no-op in Studio by default", studioHandle.enabled == false)
-	check("noop handle reports the same stats shape as a live handle", (function()
-		local stats = studioHandle.stats()
-		return stats.sent == 0 and stats.retried == 0 and stats.droppedRetry == 0
-			and stats.droppedOutbox == 0 and stats.disabled == false and stats.pending == 0
-	end)())
+	check(
+		"noop handle reports the same stats shape as a live handle",
+		(function()
+			local stats = studioHandle.stats()
+			return stats.sent == 0
+				and stats.retried == 0
+				and stats.droppedRetry == 0
+				and stats.droppedOutbox == 0
+				and stats.disabled == false
+				and stats.pending == 0
+		end)()
+	)
 
 	local studioForced = RelayPublisher.publish(Contracts.diagnostics(), {
 		endpoint = "https://relay.example/ingest",
@@ -90,21 +97,54 @@ return function(test)
 	check("studio = true overrides the gate", studioForced.enabled == true)
 	studioForced.destroy()
 
+	local noClockHttp = fakeHttp({})
+	local noClockDiagnostics = Contracts.diagnostics()
+	local noClockHandle = RelayPublisher.publish(noClockDiagnostics, {
+		endpoint = "https://relay.example/ingest",
+		httpService = noClockHttp,
+		runService = fakeRunService(false),
+		scheduler = {
+			spawn = function(fn)
+				fn()
+			end,
+			delay = function()
+				return function() end
+			end,
+		},
+		serverId = "no-clock",
+		studio = true,
+	})
+	noClockDiagnostics:record({ level = "error", name = "NoClockScheduler" })
+	noClockHandle.step()
+	check("publish falls back to os.clock when scheduler omits clock", #noClockHttp.requests == 1)
+	noClockHandle.destroy()
+
 	local handle, diagnostics, http = newPublisher()
-	diagnostics:record({ level = "error", system = "InventoryService", name = "RemoteRateLimited", message = "too fast" })
+	diagnostics:record({
+		level = "error",
+		system = "InventoryService",
+		name = "RemoteRateLimited",
+		message = "too fast",
+	})
 	check("recording does not send synchronously", #http.requests == 0)
-	check("relay defaults filter below error", (function()
-		diagnostics:record({ level = "warn", name = "Ignored" })
-		return handle.bridge:pendingCount() == 1
-	end)())
+	check(
+		"relay defaults filter below error",
+		(function()
+			diagnostics:record({ level = "warn", name = "Ignored" })
+			return handle.bridge:pendingCount() == 1
+		end)()
+	)
 
 	handle.step()
 	check("step flushes and sends one request", #http.requests == 1)
-	check("request targets the endpoint with the api key", http.requests[1].Url == "https://relay.example/ingest"
-		and http.requests[1].Headers["x-api-key"] == "secret"
-		and http.requests[1].Method == "POST")
-	test:expectMatch("envelope carries server identity", http.requests[1].Body, "\"serverId\":\"test-server\"")
-	test:expectMatch("envelope carries the wire version", http.requests[1].Body, "\"v\":1")
+	check(
+		"request targets the endpoint with the api key",
+		http.requests[1].Url == "https://relay.example/ingest"
+			and http.requests[1].Headers["x-api-key"] == "secret"
+			and http.requests[1].Method == "POST"
+	)
+	test:expectMatch("envelope carries server identity", http.requests[1].Body, '"serverId":"test-server"')
+	test:expectMatch("envelope carries the wire version", http.requests[1].Body, '"v":1')
 	test:expectMatch("envelope carries entries", http.requests[1].Body, "RemoteRateLimited")
 	check("send updates stats", handle.stats().sent == 1 and handle.stats().pending == 0)
 	handle.destroy()
@@ -140,8 +180,10 @@ return function(test)
 	exhaustHandle.step()
 	exhaustSched.advance(2)
 	exhaustHandle.step()
-	check("retry exhaustion drops the batch", #exhaustHttp.requests == 2
-		and exhaustHandle.stats().droppedRetry == 1 and exhaustHandle.stats().pending == 0)
+	check(
+		"retry exhaustion drops the batch",
+		#exhaustHttp.requests == 2 and exhaustHandle.stats().droppedRetry == 1 and exhaustHandle.stats().pending == 0
+	)
 	exhaustHandle.destroy()
 
 	test:section("RelayPublisher budget and caps")
@@ -227,8 +269,10 @@ return function(test)
 		authSched.advance(0.3)
 		authHandle.step()
 	end
-	check("repeated 401s latch the publisher off", authHandle.stats().disabled == true
-		and #authHttp.requests == 3 and authHandle.stats().droppedRetry == 3)
+	check(
+		"repeated 401s latch the publisher off",
+		authHandle.stats().disabled == true and #authHttp.requests == 3 and authHandle.stats().droppedRetry == 3
+	)
 	authDiag:record({ level = "error", name = "AfterLatch" })
 	authSched.advance(0.3)
 	authHandle.step()

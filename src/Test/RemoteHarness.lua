@@ -7,7 +7,7 @@ export type RemoteHarness = {
 	contract: (RemoteHarness) -> any,
 	runtime: (RemoteHarness) -> any,
 	diagnostics: (RemoteHarness) -> any,
-	implement: (RemoteHarness, string, (((any, any) -> any))?) -> RemoteHarness,
+	implement: (RemoteHarness, string, ((any, any) -> any)?) -> RemoteHarness,
 	bind: (RemoteHarness, string, any?) -> any,
 	call: (RemoteHarness, string, any, any) -> any,
 	clearDiagnostics: (RemoteHarness) -> (),
@@ -127,7 +127,7 @@ function RemoteHarness.diagnostics(self: any): any
 	return self._diagnostics
 end
 
-function RemoteHarness.implement(self: any, actionName: string, handler: (((any, any) -> any))?): any
+function RemoteHarness.implement(self: any, actionName: string, handler: ((any, any) -> any)?): any
 	local calls = self._handlerCalls
 	local defaultResponses = self._defaultResponses
 	local handlerFunction = handler
@@ -143,7 +143,7 @@ function RemoteHarness.implement(self: any, actionName: string, handler: (((any,
 	return self
 end
 
-function RemoteHarness.implementYielding(self: any, actionName: string, handler: (((any, any) -> any))?): any
+function RemoteHarness.implementYielding(self: any, actionName: string, handler: ((any, any) -> any)?): any
 	self:_requireScheduler()
 	local pending = self._pendingThreads
 	local defaultResponses = self._defaultResponses

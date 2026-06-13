@@ -1,7 +1,7 @@
---!nocheck
---!nolint UnknownGlobal
+--!strict
 
 local DiagnosticsBridge = require("../Studio/DiagnosticsBridge")
+local PlayersService = require("./PlayersService")
 
 local StudioBridgePublisher = {}
 
@@ -9,37 +9,29 @@ local DEFAULT_FOLDER_NAME = "__LuauContractDiagnostics"
 local DEFAULT_MAX_BATCHES = 50
 local DEFAULT_LEVEL = "warn"
 
-local function resolveService(name)
-	local ok, service = pcall(function()
-		return game:GetService(name)
-	end)
-	if ok then
-		return service
-	end
-	return nil
-end
-
-local function defaultCreateInstance(className)
+local function defaultCreateInstance(className: string): any
 	local ok, instance = pcall(function()
-		return Instance.new(className)
+		return PlayersService.createInstance(className)
 	end)
 	if ok then
 		return instance
 	end
-	error("StudioBridgePublisher cannot create " .. tostring(className) .. " outside Roblox; pass options.createInstance", 4)
+	error(
+		"StudioBridgePublisher cannot create " .. tostring(className) .. " outside Roblox; pass options.createInstance",
+		4
+	)
 end
 
-local function isStudio(runService)
+local function isStudio(runService: any): boolean
 	if runService == nil or type(runService.IsStudio) ~= "function" then
 		return false
 	end
-	local ok, value = pcall(function()
-		return runService:IsStudio()
-	end)
+	local isStudioFn = runService.IsStudio :: (any) -> any
+	local ok, value = pcall(isStudioFn, runService)
 	return ok and value == true
 end
 
-local function connectHeartbeat(runService, callback)
+local function connectHeartbeat(runService: any, callback: () -> ()): any
 	if runService == nil then
 		return nil
 	end
@@ -47,16 +39,18 @@ local function connectHeartbeat(runService, callback)
 	if heartbeat == nil or type(heartbeat.Connect) ~= "function" then
 		return nil
 	end
-	return heartbeat:Connect(callback) -- contracts-scan: ignore raw-remote-handler
+	local connect = heartbeat.Connect :: (any, () -> ()) -> any
+	return connect(heartbeat, callback) -- contracts-scan: ignore raw-remote-handler
 end
 
-local function disconnect(connection)
+local function disconnect(connection: any)
 	if connection and type(connection.Disconnect) == "function" then
-		connection:Disconnect()
+		local disconnectFn = connection.Disconnect :: (any) -> ()
+		disconnectFn(connection)
 	end
 end
 
-local function noopHandle()
+local function noopHandle(): any
 	return {
 		enabled = false,
 		flush = function()
@@ -66,8 +60,9 @@ local function noopHandle()
 	}
 end
 
-local function ensureFolder(parent, folderName, createInstance)
-	local existing = parent:FindFirstChild(folderName)
+local function ensureFolder(parent: any, folderName: string, createInstance: (string) -> any): any
+	local findFirstChild = parent.FindFirstChild :: (any, string) -> any
+	local existing = findFirstChild(parent, folderName)
 	if existing ~= nil then
 		return existing
 	end
@@ -75,31 +70,36 @@ local function ensureFolder(parent, folderName, createInstance)
 	local folder = createInstance("Folder")
 	folder.Name = folderName
 	if type(folder.SetAttribute) == "function" then
-		folder:SetAttribute("wireVersion", DiagnosticsBridge.wireVersion())
+		local setAttribute = folder.SetAttribute :: (any, string, any) -> ()
+		setAttribute(folder, "wireVersion", DiagnosticsBridge.wireVersion())
 	end
 	folder.Parent = parent
 	return folder
 end
 
-function StudioBridgePublisher.publish(diagnostics, options)
+function StudioBridgePublisher.publish(diagnostics: any, options: any): any
 	options = options or {}
 
-	local runService = options.runService or resolveService("RunService")
+	local runService = options.runService or PlayersService.resolveService("RunService")
 	if not isStudio(runService) and options.force ~= true then
 		return noopHandle()
 	end
 
-	local parent = options.parent or resolveService("ReplicatedStorage")
+	local parent = options.parent or PlayersService.resolveService("ReplicatedStorage")
 	if parent == nil or type(parent.FindFirstChild) ~= "function" then
 		error("StudioBridgePublisher.publish needs a parent container (ReplicatedStorage)", 2)
 	end
 
-	local createInstance = options.createInstance or defaultCreateInstance
-	local folder = ensureFolder(parent, options.folderName or DEFAULT_FOLDER_NAME, createInstance)
-	local maxBatches = options.maxBatches or DEFAULT_MAX_BATCHES
-	local published = {}
+	local createInstance: (string) -> any = defaultCreateInstance
+	if type(options.createInstance) == "function" then
+		createInstance = options.createInstance :: (string) -> any
+	end
+	local folderName: string = if type(options.folderName) == "string" then options.folderName else DEFAULT_FOLDER_NAME
+	local folder = ensureFolder(parent, folderName, createInstance)
+	local maxBatches: number = if type(options.maxBatches) == "number" then options.maxBatches else DEFAULT_MAX_BATCHES
+	local published: { any } = {}
 
-	local function writeBatch(batch, encoded)
+	local function writeBatch(batch: any, encoded: string)
 		local value = createInstance("StringValue")
 		value.Name = tostring(batch.seq)
 		value.Value = encoded
@@ -109,7 +109,8 @@ function StudioBridgePublisher.publish(diagnostics, options)
 		while #published > maxBatches do
 			local oldest = table.remove(published, 1)
 			if oldest ~= nil and type(oldest.Destroy) == "function" then
-				oldest:Destroy() -- contracts-scan: ignore unowned-destroy
+				local destroy = oldest.Destroy :: (any) -> ()
+				destroy(oldest) -- contracts-scan: ignore unowned-destroy
 			end
 		end
 	end
@@ -134,7 +135,7 @@ function StudioBridgePublisher.publish(diagnostics, options)
 		bridge = bridge,
 	}
 
-	function handle.flush()
+	function handle.flush(): any
 		return bridge:flush()
 	end
 

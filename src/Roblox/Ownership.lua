@@ -1,18 +1,18 @@
+--!strict
+
+local Result = require("../Core/Result")
+
 local Ownership = {}
 
 local OWNER_ATTRIBUTE = "ContractOwner"
 
-local function record(diagnostics, fields)
-	if diagnostics and diagnostics.record then
-		return diagnostics:record(fields)
-	end
-	return fields
-end
+local record = Result.record
 
-local function getFullName(instance)
-	if instance and instance.GetFullName then
+local function getFullName(instance: any): string
+	if instance and type(instance.GetFullName) == "function" then
+		local getFullNameFn = instance.GetFullName :: (any) -> any
 		local ok, name = pcall(function()
-			return instance:GetFullName()
+			return getFullNameFn(instance)
 		end)
 		if ok then
 			return name
@@ -21,37 +21,41 @@ local function getFullName(instance)
 	return tostring(instance)
 end
 
-function Ownership.claim(systemName, instance, options)
+function Ownership.claim(systemName: string, instance: any, options: any?): any
 	options = options or {}
 
 	if not instance then
 		error("Ownership.claim requires an instance", 2)
 	end
-	if not instance.SetAttribute then
+	if type(instance.SetAttribute) ~= "function" then
 		error("Ownership.claim expects a Roblox Instance-like value", 2)
 	end
 
-	instance:SetAttribute(options.ownerAttribute or OWNER_ATTRIBUTE, systemName)
+	local setAttribute = instance.SetAttribute :: (any, string, any) -> ()
+	setAttribute(instance, options.ownerAttribute or OWNER_ATTRIBUTE, systemName)
 
 	if options.collectionService and options.tag then
-		options.collectionService:AddTag(instance, options.tag)
+		local collectionService: any = options.collectionService
+		local addTag = collectionService.AddTag :: (any, any, string) -> ()
+		addTag(collectionService, instance, tostring(options.tag))
 	end
 
 	return instance
 end
 
-function Ownership.ownerOf(instance, ownerAttribute)
-	if not instance or not instance.GetAttribute then
+function Ownership.ownerOf(instance: any, ownerAttribute: string?): any
+	if not instance or type(instance.GetAttribute) ~= "function" then
 		return nil
 	end
-	return instance:GetAttribute(ownerAttribute or OWNER_ATTRIBUTE)
+	local getAttribute = instance.GetAttribute :: (any, string) -> any
+	return getAttribute(instance, ownerAttribute or OWNER_ATTRIBUTE)
 end
 
-function Ownership.isOwnedBy(systemName, instance, ownerAttribute)
+function Ownership.isOwnedBy(systemName: string, instance: any, ownerAttribute: string?): boolean
 	return Ownership.ownerOf(instance, ownerAttribute) == systemName
 end
 
-function Ownership.assertOwned(systemName, instance, diagnostics, context)
+function Ownership.assertOwned(systemName: string, instance: any, diagnostics: any?, context: any?): boolean
 	local owner = Ownership.ownerOf(instance)
 	if owner == systemName then
 		return true
@@ -72,12 +76,13 @@ function Ownership.assertOwned(systemName, instance, diagnostics, context)
 	return false
 end
 
-function Ownership.destroyOwned(systemName, instance, diagnostics, context)
+function Ownership.destroyOwned(systemName: string, instance: any, diagnostics: any?, context: any?): boolean
 	if not Ownership.assertOwned(systemName, instance, diagnostics, context) then
 		return false
 	end
-	if instance and instance.Destroy then
-		instance:Destroy()
+	if instance and type(instance.Destroy) == "function" then
+		local destroy = instance.Destroy :: (any) -> ()
+		destroy(instance)
 	end
 	return true
 end

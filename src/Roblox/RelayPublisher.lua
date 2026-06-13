@@ -1,11 +1,21 @@
---!nocheck
---!nolint UnknownGlobal
+--!strict
 
 local DiagnosticsBridge = require("../Studio/DiagnosticsBridge")
 local JsonEncode = require("../Host/JsonEncode")
+local PlayersService = require("./PlayersService")
 local TaskScheduler = require("./TaskScheduler")
 
 local RelayPublisher = {}
+
+type Scheduler = TaskScheduler.Scheduler
+
+type Stats = {
+	sent: number,
+	retried: number,
+	droppedRetry: number,
+	droppedOutbox: number,
+	disabled: boolean,
+}
 
 local ENVELOPE_VERSION = 1
 local DEFAULT_LEVEL = "error"
@@ -15,27 +25,16 @@ local DEFAULT_MAX_ATTEMPTS = 5
 local MAX_BACKOFF_SECONDS = 30
 local AUTH_FAILURE_LATCH = 3
 
-local function resolveService(name)
-	local ok, service = pcall(function()
-		return game:GetService(name)
-	end)
-	if ok then
-		return service
-	end
-	return nil
-end
-
-local function isStudio(runService)
+local function isStudio(runService: any): boolean
 	if runService == nil or type(runService.IsStudio) ~= "function" then
 		return false
 	end
-	local ok, value = pcall(function()
-		return runService:IsStudio()
-	end)
+	local isStudioFn = runService.IsStudio :: (any) -> any
+	local ok, value = pcall(isStudioFn, runService)
 	return ok and value == true
 end
 
-local function connectHeartbeat(runService, callback)
+local function connectHeartbeat(runService: any, callback: () -> ()): any
 	if runService == nil then
 		return nil
 	end
@@ -43,48 +42,45 @@ local function connectHeartbeat(runService, callback)
 	if heartbeat == nil or type(heartbeat.Connect) ~= "function" then
 		return nil
 	end
-	return heartbeat:Connect(callback) -- contracts-scan: ignore raw-remote-handler
+	local connect = heartbeat.Connect :: (any, () -> ()) -> any
+	return connect(heartbeat, callback) -- contracts-scan: ignore raw-remote-handler
 end
 
-local function disconnect(connection)
+local function disconnect(connection: any)
 	if connection and type(connection.Disconnect) == "function" then
-		connection:Disconnect()
+		local disconnectFn = connection.Disconnect :: (any) -> ()
+		disconnectFn(connection)
 	end
 end
 
-local function defaultServerId()
-	local ok, jobId = pcall(function()
-		return game.JobId
-	end)
-	if ok and type(jobId) == "string" and jobId ~= "" then
+local function defaultServerId(): string
+	local jobId = PlayersService.jobId()
+	if type(jobId) == "string" and jobId ~= "" then
 		return jobId
 	end
 	return "studio"
 end
 
-local function defaultPlaceVersion()
-	local ok, placeVersion = pcall(function()
-		return game.PlaceVersion
-	end)
-	if ok and type(placeVersion) == "number" then
+local function defaultPlaceVersion(): number?
+	local placeVersion = PlayersService.placeVersion()
+	if type(placeVersion) == "number" then
 		return placeVersion
 	end
 	return nil
 end
 
-local function defaultWait()
-	local ok, taskLib = pcall(function()
-		return task
-	end)
-	if ok and type(taskLib) == "table" and type(taskLib.wait) == "function" then
-		return function(seconds)
-			taskLib.wait(seconds)
+local function defaultWait(): ((number) -> ())?
+	local taskLib = PlayersService.resolveTaskLibrary()
+	if type(taskLib) == "table" and type(taskLib.wait) == "function" then
+		local waitFn = taskLib.wait :: (number) -> ()
+		return function(seconds: number)
+			waitFn(seconds)
 		end
 	end
 	return nil
 end
 
-local function backoffSeconds(attempts)
+local function backoffSeconds(attempts: number): number
 	local backoff = 2 ^ (attempts - 1)
 	if backoff > MAX_BACKOFF_SECONDS then
 		return MAX_BACKOFF_SECONDS
@@ -92,7 +88,7 @@ local function backoffSeconds(attempts)
 	return backoff
 end
 
-local function noopHandle()
+local function noopHandle(): any
 	return {
 		enabled = false,
 		flush = function()
@@ -116,40 +112,56 @@ local function noopHandle()
 	}
 end
 
-function RelayPublisher.publish(diagnostics, options)
+function RelayPublisher.publish(diagnostics: any, options: any): any
 	options = options or {}
 
 	if type(options.endpoint) ~= "string" or options.endpoint == "" then
 		error("RelayPublisher.publish requires options.endpoint", 2)
 	end
 
-	local runService = options.runService or resolveService("RunService")
+	local runService = options.runService or PlayersService.resolveService("RunService")
 	if isStudio(runService) and options.studio ~= true then
 		return noopHandle()
 	end
 
-	local httpService = options.httpService or resolveService("HttpService")
+	local httpService = options.httpService or PlayersService.resolveService("HttpService")
 	if httpService == nil or type(httpService.RequestAsync) ~= "function" then
 		error("RelayPublisher.publish needs an HttpService with RequestAsync; pass options.httpService", 2)
 	end
 
-	local scheduler = options.scheduler or TaskScheduler.default()
+	local scheduler: Scheduler? = options.scheduler :: Scheduler?
+	if scheduler == nil then
+		scheduler = TaskScheduler.default()
+	end
 	if scheduler == nil then
 		error("RelayPublisher.publish needs a scheduler; pass options.scheduler", 2)
 	end
+	local activeScheduler = scheduler :: Scheduler
 
-	local clock = options.clock or scheduler.clock or os.clock
-	local endpoint = options.endpoint
+	local clock: () -> number = os.clock
+	if type(activeScheduler.clock) == "function" then
+		clock = activeScheduler.clock :: () -> number
+	end
+	if type(options.clock) == "function" then
+		clock = options.clock :: () -> number
+	end
+	local endpoint: string = options.endpoint
 	local apiKey = options.apiKey
-	local serverId = options.serverId or defaultServerId()
-	local placeVersion = options.placeVersion or defaultPlaceVersion()
-	local maxOutbox = options.maxOutbox or DEFAULT_MAX_OUTBOX
-	local maxRequestsPerMinute = options.maxRequestsPerMinute or DEFAULT_MAX_REQUESTS_PER_MINUTE
-	local maxAttempts = options.maxAttempts or DEFAULT_MAX_ATTEMPTS
-	local wait = options.wait or defaultWait()
+	local serverId: string = if type(options.serverId) == "string" then options.serverId else defaultServerId()
+	local placeVersion: number? = if type(options.placeVersion) == "number"
+		then options.placeVersion
+		else defaultPlaceVersion()
+	local maxOutbox: number = if type(options.maxOutbox) == "number" then options.maxOutbox else DEFAULT_MAX_OUTBOX
+	local maxRequestsPerMinute: number = if type(options.maxRequestsPerMinute) == "number"
+		then options.maxRequestsPerMinute
+		else DEFAULT_MAX_REQUESTS_PER_MINUTE
+	local maxAttempts: number = if type(options.maxAttempts) == "number"
+		then options.maxAttempts
+		else DEFAULT_MAX_ATTEMPTS
+	local wait: ((number) -> ())? = if type(options.wait) == "function" then options.wait else defaultWait()
 
-	local outbox = {}
-	local stats = {
+	local outbox: { any } = {}
+	local stats: Stats = {
 		sent = 0,
 		retried = 0,
 		droppedRetry = 0,
@@ -167,7 +179,7 @@ function RelayPublisher.publish(diagnostics, options)
 
 	-- onBatch runs synchronously inside Diagnostics:record, which runs inside
 	-- the action pipeline: it must only enqueue, never perform HTTP.
-	local function enqueue(batch)
+	local function enqueue(batch: any)
 		table.insert(outbox, batch)
 		while #outbox > maxOutbox do
 			table.remove(outbox, 1)
@@ -186,7 +198,7 @@ function RelayPublisher.publish(diagnostics, options)
 		onBatch = enqueue,
 	})
 
-	local function budgetAvailable()
+	local function budgetAvailable(): boolean
 		local now = clock()
 		if now - windowStart >= 60 then
 			windowStart = now
@@ -198,13 +210,13 @@ function RelayPublisher.publish(diagnostics, options)
 	-- The outbox can shift while a send is in flight (enqueue evicts from the
 	-- front on overflow), so completion paths must remove the attempted batches
 	-- by identity, never by position.
-	local function removeBatches(batches)
-		local removing = {}
+	local function removeBatches(batches: { any }): number
+		local removing: { [any]: boolean } = {}
 		for _, batch in ipairs(batches) do
 			removing[batch] = true
 		end
 
-		local kept = {}
+		local kept: { any } = {}
 		local removed = 0
 		for _, batch in ipairs(outbox) do
 			if removing[batch] then
@@ -217,7 +229,7 @@ function RelayPublisher.publish(diagnostics, options)
 		return removed
 	end
 
-	local function dropBatches(batches)
+	local function dropBatches(batches: { any })
 		local removed = removeBatches(batches)
 		stats.droppedRetry += removed
 		relayDropped += removed
@@ -226,7 +238,7 @@ function RelayPublisher.publish(diagnostics, options)
 
 	local function send()
 		local batchCount = #outbox
-		local batches = {}
+		local batches: { any } = {}
 		for index = 1, batchCount do
 			batches[index] = outbox[index]
 		end
@@ -240,8 +252,9 @@ function RelayPublisher.publish(diagnostics, options)
 		}
 
 		requestsInWindow += 1
+		local requestAsync = httpService.RequestAsync :: (any, any) -> any
 		local ok, response = pcall(function()
-			return httpService:RequestAsync({
+			return requestAsync(httpService, {
 				Url = endpoint,
 				Method = "POST",
 				Headers = {
@@ -298,7 +311,7 @@ function RelayPublisher.publish(diagnostics, options)
 		end
 
 		sending = true
-		scheduler.spawn(function()
+		activeScheduler.spawn(function()
 			send()
 			sending = false
 		end)
@@ -316,7 +329,7 @@ function RelayPublisher.publish(diagnostics, options)
 		bridge = bridge,
 	}
 
-	function handle.flush()
+	function handle.flush(): any
 		local batch = bridge:flush()
 		pump()
 		return batch
@@ -337,7 +350,7 @@ function RelayPublisher.publish(diagnostics, options)
 		}
 	end
 
-	function handle.drain(timeoutSeconds)
+	function handle.drain(timeoutSeconds: number?): number
 		bridge:flush()
 		local deadline = clock() + (timeoutSeconds or 5)
 		while #outbox > 0 and clock() < deadline and not stats.disabled do
@@ -345,7 +358,8 @@ function RelayPublisher.publish(diagnostics, options)
 			if wait == nil then
 				break
 			end
-			wait(0.05)
+			local waitFn = wait :: (number) -> ()
+			waitFn(0.05)
 		end
 		return #outbox
 	end

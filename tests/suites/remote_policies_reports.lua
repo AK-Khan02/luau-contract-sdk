@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local RemoteGuard = require("../../src/Roblox/RemoteGuard")
@@ -32,8 +32,7 @@ return function(test)
 
 	test:section("RemotePolicies")
 
-	local InventoryLifecycle = Contracts.lifecycle("Inventory")
-		:transition("Ready", "GrantItem", "Ready")
+	local InventoryLifecycle = Contracts.lifecycle("Inventory"):transition("Ready", "GrantItem", "Ready")
 
 	local GrantInput = Contracts.object({
 		ItemId = Contracts.stringId(),
@@ -95,7 +94,7 @@ return function(test)
 
 	local remoteFunction = {}
 	local diagnostics = Contracts.diagnostics()
-	RemoteGuard.connect(Contract, "GrantItem", remoteFunction, function(player, payload, scope)
+	RemoteGuard.connect(Contract, "GrantItem", remoteFunction, function(_player, payload, scope)
 		return scope:write("Player.Inventory", function()
 			return {
 				granted = true,
@@ -130,7 +129,10 @@ return function(test)
 		ItemId = "Rifle",
 		Revision = 0,
 	})
-	check("remote actor policy rejects unauthorized caller", rejected == nil and diagnostics:last().name == "RemoteActorRejected")
+	check(
+		"remote actor policy rejects unauthorized caller",
+		rejected == nil and diagnostics:last().name == "RemoteActorRejected"
+	)
 	check("remote actor rejection does not mutate session", sessions.User:revision() == 0)
 
 	local missingSessionRemote = {}
@@ -145,20 +147,29 @@ return function(test)
 		ItemId = "Bow",
 		Revision = 1,
 	})
-	check("remote lifecycle policy requires named session resolver", missingSessionResult == nil and missingSessionRan == false)
-	check("remote lifecycle missing resolver is diagnosed", missingSessionDiagnostics:last().name == "LifecycleSessionMissing")
+	check(
+		"remote lifecycle policy requires named session resolver",
+		missingSessionResult == nil and missingSessionRan == false
+	)
+	check(
+		"remote lifecycle missing resolver is diagnosed",
+		missingSessionDiagnostics:last().name == "LifecycleSessionMissing"
+	)
 
-	local ResponseContract = Contracts.system("ResponseService")
-		:remote("GetStatus", Contracts.object({}, {
+	local ResponseContract = Contracts.system("ResponseService"):remote(
+		"GetStatus",
+		Contracts.object({}, {
 			allowExtra = false,
-		}), {
+		}),
+		{
 			direction = "server",
 			response = Contracts.object({
 				ok = Contracts.boolean(),
 			}, {
 				allowExtra = false,
 			}),
-		})
+		}
+	)
 
 	local statusRemote = {}
 	local responseDiagnostics = Contracts.diagnostics()
@@ -173,10 +184,9 @@ return function(test)
 	check("remote response schema rejects invalid return values", badResponse == nil)
 	check("remote response schema records diagnostics", responseDiagnostics:last().name == "RemoteResponseInvalid")
 
-	local ClientContract = Contracts.system("ClientNotifications")
-		:remote("Notify", Contracts.any(), {
-			direction = "client",
-		})
+	local ClientContract = Contracts.system("ClientNotifications"):remote("Notify", Contracts.any(), {
+		direction = "client",
+	})
 	local directionOk = pcall(function()
 		RemoteGuard.connect(ClientContract, "Notify", {
 			OnServerEvent = {
@@ -230,7 +240,10 @@ return function(test)
 					end
 				end
 				if key == "OnServerInvoke" then
-					error("'OnServerInvoke' is a callback member of RemoteFunction; you can only set the callback value, get is not available", 2)
+					error(
+						"'OnServerInvoke' is a callback member of RemoteFunction; you can only set the callback value, get is not available",
+						2
+					)
 				end
 				error(tostring(key) .. " is not a valid member of RemoteFunction", 2)
 			end,
@@ -265,13 +278,16 @@ return function(test)
 		end, {})
 	end)
 	check("strict RemoteEvent binds without member probing", strictEventOk == true)
-	check("strict RemoteEvent dispatches server events", (function()
-		if #strictEventListeners == 0 then
-			return false
-		end
-		strictEventListeners[1]({ UserId = 1 }, {})
-		return strictEventCalls == 1
-	end)())
+	check(
+		"strict RemoteEvent dispatches server events",
+		(function()
+			if #strictEventListeners == 0 then
+				return false
+			end
+			strictEventListeners[1]({ UserId = 1 }, {})
+			return strictEventCalls == 1
+		end)()
+	)
 
 	local strictFunction, strictFunctionState = strictRemoteFunction()
 	local strictFunctionOk = pcall(function()
@@ -280,8 +296,10 @@ return function(test)
 		end, {})
 	end)
 	check("strict RemoteFunction binds without reading OnServerInvoke", strictFunctionOk == true)
-	check("strict RemoteFunction handler responds", strictFunctionState.callback ~= nil
-		and strictFunctionState.callback({ UserId = 1 }, {}).total == 3)
+	check(
+		"strict RemoteFunction handler responds",
+		strictFunctionState.callback ~= nil and strictFunctionState.callback({ UserId = 1 }, {}).total == 3
+	)
 
 	-- A RemoteFunction with no response schema must still bind by class.
 	local plainFunction, plainFunctionState = strictRemoteFunction()
@@ -291,15 +309,20 @@ return function(test)
 			return nil
 		end, {})
 	end)
-	check("strict RemoteFunction without response binds by class", plainFunctionOk == true
-		and plainFunctionState.callback ~= nil)
-	check("strict RemoteFunction disconnect clears the callback", (function()
-		if plainConnection == nil then
-			return false
-		end
-		plainConnection:Disconnect()
-		return plainFunctionState.callback == nil
-	end)())
+	check(
+		"strict RemoteFunction without response binds by class",
+		plainFunctionOk == true and plainFunctionState.callback ~= nil
+	)
+	check(
+		"strict RemoteFunction disconnect clears the callback",
+		(function()
+			if plainConnection == nil then
+				return false
+			end
+			plainConnection:Disconnect()
+			return plainFunctionState.callback == nil
+		end)()
+	)
 
 	test:section("RemoteGuard rate-limit hardening")
 
@@ -382,21 +405,39 @@ return function(test)
 	check("system report has canonical permission fields", report.permissions.mayWrite[1] == "Player.Inventory")
 	check("system report includes named actor policies", report.actorPolicies[1] == "admin")
 	check("system report serializes action input schema", report.actions.GrantItem.input.shape.ItemId.kind == "string")
-	check("system report serializes remote response schema", report.remotes.GrantItem.response.shape.granted.kind == "boolean")
+	check(
+		"system report serializes remote response schema",
+		report.remotes.GrantItem.response.shape.granted.kind == "boolean"
+	)
 	check("system report serializes remote actor metadata", report.remotes.GrantItem.actor == "admin")
-	check("system report serializes lifecycle guard metadata", report.remotes.GrantItem.lifecycle.session == "inventory")
+	check(
+		"system report serializes lifecycle guard metadata",
+		report.remotes.GrantItem.lifecycle.session == "inventory"
+	)
 	check("system report serializes rate limit metadata", report.remotes.GrantItem.rateLimit.key == "remote")
-	check("system report serializes lifecycle definitions", report.lifecycles.Inventory.transitions.Ready.GrantItem == "Ready")
+	check(
+		"system report serializes lifecycle definitions",
+		report.lifecycles.Inventory.transitions.Ready.GrantItem == "Ready"
+	)
 	check("system report does not expose functions", containsFunction(report) == false)
 
-	local CustomContract = Contracts.system("CustomReport")
-		:remote("Custom", Contracts.custom("safeCustom", function()
+	local CustomContract = Contracts.system("CustomReport"):remote(
+		"Custom",
+		Contracts.custom("safeCustom", function()
 			return true
-		end))
+		end)
+	)
 	local customReport = CustomContract:describe()
-	check("custom schemas report by name", customReport.remotes.Custom.payload.kind == "custom" and customReport.remotes.Custom.payload.name == "safeCustom")
+	check(
+		"custom schemas report by name",
+		customReport.remotes.Custom.payload.kind == "custom"
+			and customReport.remotes.Custom.payload.name == "safeCustom"
+	)
 	check("custom schema report hides validator", containsFunction(customReport) == false)
 
 	local studioReport = Contracts.Studio.StudioReport.fromContracts({ Contract })
-	check("studio report consumes contract reports", studioReport.summary.contractCount == 1 and studioReport.contracts[1].name == "InventoryService")
+	check(
+		"studio report consumes contract reports",
+		studioReport.summary.contractCount == 1 and studioReport.contracts[1].name == "InventoryService"
+	)
 end

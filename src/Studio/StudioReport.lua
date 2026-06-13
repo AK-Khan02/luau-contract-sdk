@@ -1,8 +1,10 @@
+--!strict
+
 local StaticScanner = require("../Core/StaticScanner")
 
 local StudioReport = {}
 
-local function copyMap(value)
+local function copyMap(value: any): any
 	if type(value) ~= "table" then
 		return value
 	end
@@ -14,12 +16,12 @@ local function copyMap(value)
 	return copy
 end
 
-local function increment(counts, key)
+local function increment(counts: any, key: any)
 	local safeKey = key or "unknown"
 	counts[safeKey] = (counts[safeKey] or 0) + 1
 end
 
-local function countPattern(source, pattern)
+local function countPattern(source: any, pattern: string): number
 	local count = 0
 	for _ in string.gmatch(source or "", pattern) do
 		count += 1
@@ -27,10 +29,10 @@ local function countPattern(source, pattern)
 	return count
 end
 
-local function extractSystemNames(source)
+local function extractSystemNames(source: any): { string }
 	local names = {}
 
-	for name in string.gmatch(source or "", "Contracts%.system%s*%(%s*\"([^\"]+)\"%s*%)") do
+	for name in string.gmatch(source or "", 'Contracts%.system%s*%(%s*"([^"]+)"%s*%)') do
 		table.insert(names, name)
 	end
 	for name in string.gmatch(source or "", "Contracts%.system%s*%(%s*'([^']+)'%s*%)") do
@@ -40,11 +42,11 @@ local function extractSystemNames(source)
 	return names
 end
 
-local function scriptPath(scriptInfo)
+local function scriptPath(scriptInfo: any): string
 	return scriptInfo.path or scriptInfo.name or "<script>"
 end
 
-local function addSystems(systems, scriptInfo)
+local function addSystems(systems: { any }, scriptInfo: any)
 	local source = scriptInfo.source or ""
 	local systemNames = extractSystemNames(source)
 
@@ -62,7 +64,7 @@ local function addSystems(systems, scriptInfo)
 	end
 end
 
-local function addScannerFindings(findings, scriptInfo)
+local function addScannerFindings(findings: { any }, scriptInfo: any)
 	local scan = StaticScanner.scanSource(scriptInfo.source or "", {
 		path = scriptPath(scriptInfo),
 	})
@@ -72,13 +74,14 @@ local function addScannerFindings(findings, scriptInfo)
 	end
 end
 
-local function diagnosticRowsFromReport(diagnosticsReport)
+local function diagnosticRowsFromReport(diagnosticsReport: any): { any }
 	local rows = {}
 	if not diagnosticsReport then
 		return rows
 	end
 
-	for _, entry in ipairs(diagnosticsReport.recent or {}) do
+	for _, rawEntry in ipairs(diagnosticsReport.recent or {}) do
+		local entry: any = rawEntry
 		table.insert(rows, {
 			id = entry.id,
 			level = entry.level,
@@ -93,7 +96,7 @@ local function diagnosticRowsFromReport(diagnosticsReport)
 	return rows
 end
 
-local function scannerSummary(findings)
+local function scannerSummary(findings: { any }): any
 	local bySeverity = {}
 	local byRule = {}
 	local byCategory = {}
@@ -112,7 +115,7 @@ local function scannerSummary(findings)
 	}
 end
 
-local function countScriptsByClass(scripts)
+local function countScriptsByClass(scripts: { any }): any
 	local counts = {}
 	for _, scriptInfo in ipairs(scripts) do
 		increment(counts, scriptInfo.className)
@@ -120,10 +123,11 @@ local function countScriptsByClass(scripts)
 	return counts
 end
 
-local function contractReports(contracts)
+local function contractReports(contracts: any): { any }
 	local reports = {}
-	for _, entry in ipairs(contracts or {}) do
-		local contract = entry
+	for _, rawEntry in ipairs(contracts or {}) do
+		local entry: any = rawEntry
+		local contract: any = entry
 		local path = nil
 		if type(entry) == "table" and entry.contract ~= nil then
 			contract = entry.contract
@@ -141,7 +145,7 @@ local function contractReports(contracts)
 	return reports
 end
 
-function StudioReport.fromScripts(scripts, options)
+function StudioReport.fromScripts(scripts: { any }, options: any?): any
 	options = options or {}
 
 	local systems = {}
@@ -196,7 +200,11 @@ function StudioReport.formatSystem(system)
 end
 
 function StudioReport.formatDiagnostic(row)
-	return ("[%s] %s %s"):format(tostring(row.level or "info"), tostring(row.name or "Diagnostic"), tostring(row.message or ""))
+	return ("[%s] %s %s"):format(
+		tostring(row.level or "info"),
+		tostring(row.name or "Diagnostic"),
+		tostring(row.message or "")
+	)
 end
 
 function StudioReport.formatFinding(finding)

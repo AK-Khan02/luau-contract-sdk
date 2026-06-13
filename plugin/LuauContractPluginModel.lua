@@ -35,7 +35,7 @@ export type LiveRow = {
 
 local PluginModel = {}
 
-local SCRIPT_CLASSES: {[string]: boolean} = {
+local SCRIPT_CLASSES: { [string]: boolean } = {
 	Script = true,
 	LocalScript = true,
 	ModuleScript = true,
@@ -57,13 +57,13 @@ function PluginModel.scriptPath(instance: any): string
 	return tostring(instance and instance.Name or "<script>")
 end
 
-function PluginModel.collectScripts(root: any): {ScriptInfo}
-	local scripts: {ScriptInfo} = {}
+function PluginModel.collectScripts(root: any): { ScriptInfo }
+	local scripts: { ScriptInfo } = {}
 	if not root or type(root.GetDescendants) ~= "function" then
 		return scripts
 	end
 
-	local getDescendants = root.GetDescendants :: (any) -> {any}
+	local getDescendants = root.GetDescendants :: (any) -> { any }
 	for _, rawInstance in ipairs(getDescendants(root)) do
 		local instance: any = rawInstance
 		if PluginModel.isScriptClass(tostring(instance.ClassName)) then
@@ -85,7 +85,7 @@ function PluginModel.collectScripts(root: any): {ScriptInfo}
 	return scripts
 end
 
-function PluginModel.summaryCards(report: any): {SummaryCard}
+function PluginModel.summaryCards(report: any): { SummaryCard }
 	local summary = report.summary or {}
 
 	return {
@@ -112,8 +112,8 @@ function PluginModel.summaryCards(report: any): {SummaryCard}
 	}
 end
 
-function PluginModel.systemRows(report: any, formatSystem: (any) -> string): {SystemRow}
-	local rows: {SystemRow} = {}
+function PluginModel.systemRows(report: any, formatSystem: (any) -> string): { SystemRow }
+	local rows: { SystemRow } = {}
 	for _, rawSystem in ipairs(report.systems or {}) do
 		local system: any = rawSystem
 		table.insert(rows, {
@@ -134,8 +134,8 @@ function PluginModel.findingTone(finding: any): string
 	return "muted"
 end
 
-function PluginModel.findingRows(report: any): {FindingRow}
-	local rows: {FindingRow} = {}
+function PluginModel.findingRows(report: any): { FindingRow }
+	local rows: { FindingRow } = {}
 	for _, rawFinding in ipairs((report.scanner and report.scanner.findings) or {}) do
 		local finding: any = rawFinding
 		table.insert(rows, {
@@ -186,8 +186,8 @@ function PluginModel.formatLiveEntry(entry: any): string
 	return prefix
 end
 
-function PluginModel.liveRows(batch: any, formatEntry: ((any) -> string)?): {LiveRow}
-	local rows: {LiveRow} = {}
+function PluginModel.liveRows(batch: any, formatEntry: ((any) -> string)?): { LiveRow }
+	local rows: { LiveRow } = {}
 	if batch == nil then
 		return rows
 	end
@@ -205,7 +205,7 @@ function PluginModel.liveRows(batch: any, formatEntry: ((any) -> string)?): {Liv
 	return rows
 end
 
-function PluginModel.appendLive(rows: {LiveRow}, newRows: {LiveRow}, maxRows: number): {LiveRow}
+function PluginModel.appendLive(rows: { LiveRow }, newRows: { LiveRow }, maxRows: number): { LiveRow }
 	for _, row in ipairs(newRows) do
 		table.insert(rows, row)
 	end
@@ -215,8 +215,8 @@ function PluginModel.appendLive(rows: {LiveRow}, newRows: {LiveRow}, maxRows: nu
 	return rows
 end
 
-function PluginModel.diagnosticRows(report: any, formatDiagnostic: (any) -> string): {DiagnosticRow}
-	local rows: {DiagnosticRow} = {}
+function PluginModel.diagnosticRows(report: any, formatDiagnostic: (any) -> string): { DiagnosticRow }
+	local rows: { DiagnosticRow } = {}
 	for _, rawRow in ipairs(report.diagnostics or {}) do
 		local row: any = rawRow
 		table.insert(rows, {

@@ -1,8 +1,10 @@
+--!strict
+
 local OverlayFeed = require("../Core/OverlayFeed")
 
 local OverlayState = {}
 
-function OverlayState.bind(diagnostics, config)
+function OverlayState.bind(diagnostics: any, config: any): any
 	local feed = OverlayFeed.new(diagnostics, config)
 
 	return {

@@ -20,7 +20,7 @@ local DEFAULT_MAX_BATCH_ENTRIES = 20
 local DEFAULT_FLUSH_INTERVAL = 0.25
 local DEFAULT_MAX_CONTEXT_DEPTH = 3
 
-local LEVEL_RANKS: {[string]: number} = {
+local LEVEL_RANKS: { [string]: number } = {
 	info = 1,
 	warn = 2,
 	error = 3,

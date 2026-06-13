@@ -1,43 +1,47 @@
---!nocheck
---!nolint UnknownGlobal
+--!strict
+
+local PlayersService = require("./PlayersService")
+
+export type Scheduler = {
+	spawn: (any, ...any) -> any,
+	delay: (number, () -> ()) -> () -> (),
+	clock: (() -> number)?,
+}
+
+type TaskLibrary = {
+	spawn: (any, ...any) -> any,
+	delay: (number, () -> ()) -> any,
+	cancel: ((any) -> ())?,
+}
 
 local TaskScheduler = {}
 
-local function resolveTaskLibrary()
-	local ok, taskLib = pcall(function()
-		return task
-	end)
-	if ok then
-		return taskLib
-	end
-	return nil
-end
-
-function TaskScheduler.from(taskLib)
+function TaskScheduler.from(taskLib: any): Scheduler?
 	if type(taskLib) ~= "table" or type(taskLib.spawn) ~= "function" or type(taskLib.delay) ~= "function" then
 		return nil
 	end
 
+	local typedTaskLib = taskLib :: TaskLibrary
 	return {
-		spawn = function(fnOrThread, ...)
-			return taskLib.spawn(fnOrThread, ...)
+		spawn = function(fnOrThread: any, ...: any): any
+			return typedTaskLib.spawn(fnOrThread, ...)
 		end,
-		delay = function(seconds, callback)
-			local thread = taskLib.delay(seconds, callback)
+		delay = function(seconds: number, callback: () -> ()): () -> ()
+			local thread = typedTaskLib.delay(seconds, callback)
 			return function()
-				if type(taskLib.cancel) == "function" then
-					pcall(taskLib.cancel, thread)
+				if typedTaskLib.cancel ~= nil then
+					pcall(typedTaskLib.cancel, thread)
 				end
 			end
 		end,
-		clock = function()
+		clock = function(): number
 			return os.clock()
 		end,
 	}
 end
 
-function TaskScheduler.default()
-	return TaskScheduler.from(resolveTaskLibrary())
+function TaskScheduler.default(): Scheduler?
+	return TaskScheduler.from(PlayersService.resolveTaskLibrary())
 end
 
 return TaskScheduler

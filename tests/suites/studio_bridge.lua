@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local DiagnosticsBridge = require("../../src/Studio/DiagnosticsBridge")
@@ -129,8 +129,14 @@ return function(test)
 	check("flush invokes onBatch", #batches == 1 and batches[1].seq == 1)
 
 	local entry = batch.entries[1]
-	check("entry keeps diagnostic fields", entry.name == "RemoteRateLimited" and entry.level == "error" and entry.system == "InventoryService")
-	check("player-like context is redacted", entry.context.player.userId == 1234 and entry.context.player.name == "Rica")
+	check(
+		"entry keeps diagnostic fields",
+		entry.name == "RemoteRateLimited" and entry.level == "error" and entry.system == "InventoryService"
+	)
+	check(
+		"player-like context is redacted",
+		entry.context.player.userId == 1234 and entry.context.player.name == "Rica"
+	)
 	check("player redaction drops other fields", entry.context.player.Character == nil)
 	check("functions in context become strings", type(entry.context.callback) == "string")
 
@@ -156,8 +162,8 @@ return function(test)
 	check("deep contexts are depth-capped", deepBatch.entries[1].context.a.b == "<table>")
 	deepBridge:destroy()
 
-	check("encoded batch is JSON", string.find(encodedBatches[1], "\"RemoteRateLimited\"", 1, true) ~= nil)
-	check("encoded batch carries wire version", string.find(encodedBatches[1], "\"v\":1", 1, true) ~= nil)
+	check("encoded batch is JSON", string.find(encodedBatches[1], '"RemoteRateLimited"', 1, true) ~= nil)
+	check("encoded batch carries wire version", string.find(encodedBatches[1], '"v":1', 1, true) ~= nil)
 
 	diagnostics:record({ level = "warn", name = "A" })
 	diagnostics:record({ level = "warn", name = "B" })
@@ -209,7 +215,10 @@ return function(test)
 	})
 
 	check("publisher is enabled in studio", handle.enabled == true)
-	check("publisher creates the diagnostics folder", created[1] ~= nil and created[1].ClassName == "Folder" and created[1].Name == "__LuauContractDiagnostics")
+	check(
+		"publisher creates the diagnostics folder",
+		created[1] ~= nil and created[1].ClassName == "Folder" and created[1].Name == "__LuauContractDiagnostics"
+	)
 	check("folder records wire version", created[1]._attributes.wireVersion == 1)
 	check("publisher connects heartbeat", runService._heartbeat ~= nil)
 
@@ -228,9 +237,12 @@ return function(test)
 	end
 	check("publisher writes one StringValue per batch", #stringValues == 3)
 	check("publisher names batches by seq", stringValues[1].Name == "1" and stringValues[3].Name == "3")
-	check("publisher trims oldest beyond cap", stringValues[1]._destroyed == true and stringValues[2]._destroyed == false)
+	check(
+		"publisher trims oldest beyond cap",
+		stringValues[1]._destroyed == true and stringValues[2]._destroyed == false
+	)
 	check("batch values parent to the folder", stringValues[3].Parent == created[1])
-	check("batch values hold encoded JSON", string.find(stringValues[3].Value, "\"Third\"", 1, true) ~= nil)
+	check("batch values hold encoded JSON", string.find(stringValues[3].Value, '"Third"', 1, true) ~= nil)
 
 	publisherDiagnostics:record({ level = "info", name = "BelowDefault" })
 	handle.flush()
@@ -302,18 +314,26 @@ return function(test)
 
 	test:expect("default returns nil outside Roblox", TaskScheduler.default(), nil)
 	test:expect("from rejects nil libraries", TaskScheduler.from(nil), nil)
-	test:expect("from rejects partial libraries missing delay", TaskScheduler.from({
-		spawn = function() end,
-	}), nil)
-	test:expect("from rejects partial libraries missing spawn", TaskScheduler.from({
-		delay = function() end,
-	}), nil)
+	test:expect(
+		"from rejects partial libraries missing delay",
+		TaskScheduler.from({
+			spawn = function() end,
+		}),
+		nil
+	)
+	test:expect(
+		"from rejects partial libraries missing spawn",
+		TaskScheduler.from({
+			delay = function() end,
+		}),
+		nil
+	)
 
 	local spawned = {}
 	local delayed = {}
 	local cancelled = {}
 	local fakeTask = {
-		spawn = function(fn, ...)
+		spawn = function(fn)
 			table.insert(spawned, fn)
 			return fn
 		end,
@@ -328,10 +348,13 @@ return function(test)
 	}
 
 	local taskScheduler = TaskScheduler.from(fakeTask)
-	check("from wraps a complete task library", taskScheduler ~= nil
-		and type(taskScheduler.spawn) == "function"
-		and type(taskScheduler.delay) == "function"
-		and type(taskScheduler.clock) == "function")
+	check(
+		"from wraps a complete task library",
+		taskScheduler ~= nil
+			and type(taskScheduler.spawn) == "function"
+			and type(taskScheduler.delay) == "function"
+			and type(taskScheduler.clock) == "function"
+	)
 
 	taskScheduler.spawn(function() end)
 	test:expect("scheduler spawn delegates to task.spawn", #spawned, 1)

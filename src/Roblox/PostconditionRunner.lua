@@ -1,13 +1,18 @@
+--!strict
+
+local Result = require("../Core/Result")
+
 local PostconditionRunner = {}
 
-local function record(diagnostics, fields)
-	if diagnostics and diagnostics.record then
-		return diagnostics:record(fields)
-	end
-	return fields
-end
+local record = Result.record
 
-function PostconditionRunner.run(systemContract, actionName, context, diagnostics, action)
+function PostconditionRunner.run(
+	systemContract: any,
+	actionName: string,
+	context: any?,
+	diagnostics: any?,
+	action: any
+): any
 	if not systemContract or not systemContract.checkPostconditions then
 		error("PostconditionRunner.run expects a system contract", 2)
 	end
@@ -34,7 +39,8 @@ function PostconditionRunner.run(systemContract, actionName, context, diagnostic
 		}
 	end
 
-	local postconditions = systemContract:checkPostconditions(context, diagnostics)
+	local checkPostconditions = systemContract.checkPostconditions :: (any, any?, any?) -> any
+	local postconditions = checkPostconditions(systemContract, context, diagnostics)
 	return {
 		ok = postconditions.ok,
 		value = value,
