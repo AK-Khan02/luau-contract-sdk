@@ -1,0 +1,7 @@
+# This file lists optional project tools managed by Rokit.
+# npm scripts remain the release-gate entrypoint; Rokit gives contributors a
+# pinned Roblox-native toolchain for editors and local workflows.
+
+[tools]
+stylua = "JohnnyMorganz/StyLua@2.5.2"
+selene = "Kampfkarren/selene@0.31.0"

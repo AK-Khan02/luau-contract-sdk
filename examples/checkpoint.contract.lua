@@ -1,3 +1,5 @@
+--!strict
+
 local Contracts = require("../src/Contracts")
 
 local ActivateCheckpointSchema = Contracts.object({

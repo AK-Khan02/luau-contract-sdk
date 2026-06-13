@@ -11,6 +11,11 @@ local Contracts = require("../src")
 Inside a packaged Roblox project, require the package ModuleScript that maps to
 `src/init.lua`.
 
+The stable compatibility surface is grouped under `Contracts.Public`; existing
+top-level exports remain available as aliases. See
+[`PUBLIC_API.md`](PUBLIC_API.md) for the stable, experimental, and internal
+classification.
+
 ## Contract Builder
 
 ```lua
@@ -939,6 +944,10 @@ magnitude from the `X`/`Y`/`Z` components and discards any client-supplied
 Custom schemas report as `{ kind = "custom", name = "..." }` without exposing
 their validator function.
 
+These schema builders are stable at the package root and under
+`Contracts.Public`. The full schema module is also available as
+`Contracts.Schema` and `Contracts.Public.Schema`.
+
 ## Stable System Reports
 
 `contract:describe()` returns a plain serializable report for docs, tests, and
@@ -1097,6 +1106,8 @@ local text = overlay:text()
 
 `OverlayFeed` is pure Luau. It does not create UI. It exposes rows and text that
 a Roblox debug overlay, log sink, or future Studio plugin can render.
+`Contracts.OverlayFeed` is classified as experimental while the overlay row
+shape and presentation hooks settle.
 
 ## Static Scanner
 
@@ -1134,6 +1145,10 @@ Use `-- contracts-scan: ignore <ruleId>` on a line to suppress an intentional
 finding. The scanner is heuristic and operates on source text; host tooling is
 responsible for reading files and passing contents into `scanSource`.
 
+`Contracts.StaticScanner` is classified as experimental. It is safe to use for
+tooling, but scanner rules and finding details may expand before the module is
+promoted to the stable surface.
+
 ## Remote Attack Tests
 
 The CLI can generate deterministic remote attack suites from exact contracts:
@@ -1150,6 +1165,8 @@ luau tests/generated/run.luau
 Generated suites use `Contracts.Test.remoteHarness(...)`, a pure Luau harness
 that creates fake remotes, binds them through `Runtime:bindRemote`, tracks
 handler calls, and exposes diagnostics.
+`Contracts.Test` is classified as experimental; it is intended for SDK-grade
+tests and generated suites, but helper names may expand as coverage grows.
 
 ```lua
 local harness = Contracts.Test.remoteHarness(Contract, {
@@ -1223,6 +1240,8 @@ The report contains:
 - `scanner.summary`
 
 This is the pure model used by the Studio plugin source.
+`Contracts.Studio` is classified as experimental because Studio report fields
+may expand with plugin and CI workflows.
 
 When live contract modules are already available, use:
 
@@ -1235,7 +1254,9 @@ local report = Contracts.Studio.StudioReport.fromContracts({
 ## Host Tools
 
 `Contracts.Host` contains pure Luau modules used by the CLI/CI host adapter.
-They do not read or write files.
+They do not read or write files. Host modules are classified as experimental
+because the CLI report pipeline may gain fields and policy details as generated
+workflows evolve.
 
 ```lua
 local report = Contracts.Host.ScanRunner.run({
@@ -1284,6 +1305,12 @@ local OverlayState = Contracts.Roblox.OverlayState
 
 The core package remains Roblox-free. Adapters are the only layer that expects
 RemoteEvent-like or Instance-like values.
+
+`Contracts.Roblox` is classified as experimental while the adapter set grows.
+The stable `Contracts.guardRemote(...)`, `Contracts.cancelOnLeave(...)`,
+`Contracts.publishDiagnostics(...)`, and `Contracts.publishRelay(...)`
+convenience helpers remain the preferred compatibility surface for common
+adapter use.
 
 `RemoteGuard.connect` detects action-bound remotes and routes them through
 `System:runAction`. It connects RemoteEvent-like values with

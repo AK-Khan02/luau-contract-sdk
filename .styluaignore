@@ -1,0 +1,7 @@
+.git/
+.tool-cache/
+node_modules/
+reports/
+.tmp-*/
+luau-contract-project-*/
+.luau-contract-runner-*.lua

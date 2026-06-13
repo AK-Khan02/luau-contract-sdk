@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  LUAU_VERSION: "0.725"
+
+jobs:
+  test:
+    name: Local gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Node dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Install Luau toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="$RUNNER_TEMP/luau.zip"
+          install_dir="$RUNNER_TEMP/luau"
+          url="https://github.com/luau-lang/luau/releases/download/${LUAU_VERSION}/luau-ubuntu.zip"
+
+          curl --fail --location --show-error --silent "$url" --output "$archive"
+          mkdir -p "$install_dir"
+          unzip -q "$archive" -d "$install_dir"
+          chmod +x "$install_dir/luau" "$install_dir/luau-analyze"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Print tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          command -v luau
+          command -v luau-analyze
+          luau --help >/dev/null
+          luau-analyze --help >/dev/null
+
+      - name: Run release gate
+        run: npm test

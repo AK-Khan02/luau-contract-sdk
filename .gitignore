@@ -1,5 +1,6 @@
 .planning/
 planning/
+node_modules/
 
 # Agent tooling & installed skills — never commit (generic; no skill named)
 .agents/
@@ -23,3 +24,4 @@ docs/*.html
 .luau-contract-runner-*.lua
 luau-contract-project-*
 reports/
+.tool-cache/

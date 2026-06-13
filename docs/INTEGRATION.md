@@ -3,6 +3,11 @@
 ## Install Shape
 
 The package root is `src/init.lua`. The public API is `src/Contracts.lua`.
+The stable compatibility surface is documented in
+[`PUBLIC_API.md`](PUBLIC_API.md) and grouped at runtime under
+`Contracts.Public`. Existing top-level exports remain available; new
+integrations should avoid `Contracts.Internal` and should treat
+`Contracts.Experimental` as available but still subject to refinement.
 
 Supported local validation:
 
@@ -52,6 +57,12 @@ expect Roblox-like values:
 - `PostconditionRunner` wraps code that only needs post-action checks.
 - `OverlayState` exposes rows and formatted text for a Roblox debug overlay
   without creating UI itself.
+
+For long-lived integration code, prefer stable root helpers such as
+`Contracts.system`, `Contracts.runtime`, `Contracts.guardRemote`,
+`Contracts.cancelOnLeave`, `Contracts.publishDiagnostics`, and
+`Contracts.publishRelay`. Direct adapter access through `Contracts.Roblox` is
+classified as experimental.
 
 ## Suggested Consumer Pattern
 
@@ -329,7 +340,9 @@ Server code can record and query violations, while a debug overlay can render
 
 ## Static Checks
 
-The static scanner is available at `Contracts.StaticScanner`.
+The static scanner is available at `Contracts.StaticScanner`. It is classified
+as experimental because rule metadata and finding details may expand as scanner
+coverage grows.
 
 It scans source text and returns structured findings:
 
@@ -356,6 +369,10 @@ The host command performs project discovery in Node, then generates a temporary
 Luau runner that calls `Contracts.Host.ScanRunner`. The temporary runner is
 deleted after the scan. Add `.luau-contract-runner-*.lua` to ignore rules in
 consumer repositories if you vendor the tool.
+
+`Contracts.Host` is exported for the bundled CLI and advanced host integrations,
+but it is classified as experimental. Prefer the `tools/luau-contract.js`
+command unless you specifically need to embed the pure Luau host modules.
 
 Supported outputs:
 

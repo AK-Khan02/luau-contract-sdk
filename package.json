@@ -2,11 +2,25 @@
   "name": "luau-contract-sdk-tools",
   "version": "0.11.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "bin": {
     "luau-contract": "tools/luau-contract.js"
   },
   "scripts": {
+    "analyze": "node tools/analyze-luau.js",
+    "format": "stylua --verify src tests plugin examples",
+    "format:check": "stylua --check --output-format summary src tests plugin examples",
+    "lint": "npm run lint:selene",
+    "lint:selene": "node tools/run-selene.js src examples plugin tests",
     "scan": "node tools/luau-contract.js scan",
+    "scan:ci": "node tools/luau-contract.js scan --fail-on error",
+    "test": "npm run format:check && npm run test:luau && npm run test:host && npm run scan:ci && npm run analyze && npm run lint:selene",
+    "test:luau": "luau tests/run.lua",
     "test:host": "node --test tools/tests/*.test.js"
+  },
+  "devDependencies": {
+    "@johnnymorganz/stylua-bin": "2.5.2"
   }
 }

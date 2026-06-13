@@ -1,3 +1,5 @@
+--!strict
+
 local Contracts = require("../src/Contracts")
 
 local EquipItemSchema = Contracts.object({
@@ -16,7 +18,8 @@ return Contracts.system("InventoryService")
 		return context.player ~= nil
 	end)
 	:postcondition("EquippedItemExists", function(context)
-		return context.findEquippedItem ~= nil and context.findEquippedItem(context.player, context.payload.ItemId) ~= nil
+		local findEquippedItem = context.findEquippedItem :: ((any, any) -> any)?
+		return findEquippedItem ~= nil and findEquippedItem(context.player, context.payload.ItemId) ~= nil
 	end)
 	:action("EquipItem", {
 		input = EquipItemSchema,

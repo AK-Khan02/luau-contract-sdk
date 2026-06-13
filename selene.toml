@@ -1,0 +1,21 @@
+std = "roblox"
+
+exclude = [
+	"node_modules/**",
+	".tool-cache/**",
+	".tmp-*/**",
+	"reports/**",
+	"tests/fixtures/**",
+]
+
+[lints]
+deprecated = "allow"
+global_usage = "deny"
+if_same_then_else = "deny"
+incorrect_standard_library_use = "deny"
+manual_table_clone = "allow"
+multiple_statements = "deny"
+roblox_manual_fromscale_or_fromoffset = "allow"
+shadowing = "warn"
+undefined_variable = "deny"
+unused_variable = "warn"

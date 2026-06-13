@@ -1,3 +1,5 @@
+--!strict
+
 local Contracts = require("../src/Contracts")
 
 local SpawnLifecycle = Contracts.lifecycle("SpawnLoadout")
@@ -8,19 +10,26 @@ local SpawnLifecycle = Contracts.lifecycle("SpawnLoadout")
 	:transition("Dead", "Respawn", "SpawnRequested")
 	:transition("Dead", "MenuOpen", "Menu")
 
-local function isAliveHumanoid(humanoid)
+local function isAliveHumanoid(humanoid: any): boolean
 	return humanoid ~= nil and type(humanoid.Health) == "number" and humanoid.Health > 0
 end
 
-local function countNamedTool(container, toolName)
+local function countNamedTool(container: any, toolName: string): number
 	if not container then
 		return 0
 	end
 
-	if container.GetChildren then
+	if type(container.GetChildren) == "function" then
 		local count = 0
-		for _, child in ipairs(container:GetChildren()) do
-			if child.Name == toolName and child.IsA and child:IsA("Tool") then
+		local getChildren = container.GetChildren :: (any) -> { any }
+		for _, rawChild in ipairs(getChildren(container)) do
+			local child: any = rawChild
+			local isA = child.IsA
+			if
+				child.Name == toolName
+				and type(isA) == "function"
+				and (isA :: (any, string) -> boolean)(child, "Tool")
+			then
 				count += 1
 			end
 		end
@@ -29,7 +38,8 @@ local function countNamedTool(container, toolName)
 
 	local children = container.Children or {}
 	local count = 0
-	for _, child in pairs(children) do
+	for _, rawChild in pairs(children) do
+		local child: any = rawChild
 		if child.Name == toolName and (child.ClassName == "Tool" or child.IsTool == true) then
 			count += 1
 		end
@@ -37,7 +47,7 @@ local function countNamedTool(container, toolName)
 	return count
 end
 
-local function countPlayerTools(player, toolName)
+local function countPlayerTools(player: any, toolName: string): number
 	return countNamedTool(player and player.Backpack, toolName) + countNamedTool(player and player.Character, toolName)
 end
 
