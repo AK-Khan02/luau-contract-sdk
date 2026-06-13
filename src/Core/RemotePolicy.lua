@@ -1,6 +1,8 @@
 --!strict
 
+local Names = require("./Names")
 local Schema = require("./Schema")
+local TableUtil = require("./TableUtil")
 
 export type RemotePolicy = {
 	name: string,
@@ -11,27 +13,16 @@ export type RemotePolicy = {
 	actor: any?,
 	lifecycle: any,
 	rateLimit: any?,
-	tags: {string},
+	tags: { string },
 }
 
 local RemotePolicy = {}
 
-local function assertName(kind: string, value: any)
-	if type(value) ~= "string" or value == "" then
-		error(kind .. " must be a non-empty string", 3)
-	end
-end
+local assertName = Names.assertName
+local appendUnique = TableUtil.appendUnique
+local copyList = TableUtil.copyList
 
-local function appendUnique(values: {string}, value: string)
-	for _, existing in ipairs(values) do
-		if existing == value then
-			return
-		end
-	end
-	table.insert(values, value)
-end
-
-local function normalizeStringList(kind: string, values: any?): {string}
+local function normalizeStringList(kind: string, values: any?): { string }
 	if values == nil then
 		return {}
 	end
@@ -49,14 +40,6 @@ local function normalizeStringList(kind: string, values: any?): {string}
 		appendUnique(normalized, value :: string)
 	end
 	return normalized
-end
-
-local function copyList(values: {any}?): {any}
-	local copy = {}
-	for index, value in ipairs(values or {}) do
-		copy[index] = value
-	end
-	return copy
 end
 
 local function copyTable(value: any): any

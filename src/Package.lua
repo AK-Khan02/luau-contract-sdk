@@ -1,3 +1,5 @@
+--!strict
+
 return {
 	name = "luau-contract-sdk",
 	version = "0.11.0",

@@ -1,3 +1,5 @@
+--!strict
+
 local ok, Contracts = pcall(require, "./Contracts")
 if ok then
 	return Contracts

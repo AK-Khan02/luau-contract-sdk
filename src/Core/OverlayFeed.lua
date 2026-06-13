@@ -32,7 +32,7 @@ local function copyRow(row: Row): Row
 	return copy
 end
 
-local function copyRows(rows: {Row}): {Row}
+local function copyRows(rows: { Row }): { Row }
 	local copy = {}
 	for index, row in ipairs(rows) do
 		copy[index] = copyRow(row)
@@ -40,7 +40,10 @@ local function copyRows(rows: {Row}): {Row}
 	return copy
 end
 
-local function toRow(entry: DiagnosticReport.DiagnosticEntry, formatter: (DiagnosticReport.DiagnosticEntry) -> string): Row
+local function toRow(
+	entry: DiagnosticReport.DiagnosticEntry,
+	formatter: (DiagnosticReport.DiagnosticEntry) -> string
+): Row
 	return {
 		id = entry.id,
 		time = entry.time,
@@ -65,7 +68,7 @@ function OverlayFeed.new(diagnostics: any, config: Config?): any
 
 	local diagnosticsSource: any = diagnostics
 	if diagnosticsSource and type(diagnosticsSource.list) == "function" then
-		local listFn = diagnosticsSource.list :: (any) -> {DiagnosticReport.DiagnosticEntry}
+		local listFn = diagnosticsSource.list :: (any) -> { DiagnosticReport.DiagnosticEntry }
 		for _, entry in ipairs(listFn(diagnosticsSource)) do
 			feed:_add(entry)
 		end
@@ -89,7 +92,7 @@ function OverlayFeed._add(self: any, entry: DiagnosticReport.DiagnosticEntry)
 	end
 end
 
-function OverlayFeed.rows(self: any): {Row}
+function OverlayFeed.rows(self: any): { Row }
 	return copyRows(self._rows)
 end
 
@@ -102,7 +105,7 @@ function OverlayFeed.latest(self: any): Row?
 end
 
 function OverlayFeed.text(self: any): string
-	local lines: {string} = {}
+	local lines: { string } = {}
 	for _, row in ipairs(self._rows) do
 		table.insert(lines, row.text)
 	end

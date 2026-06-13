@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 
@@ -9,21 +9,20 @@ return function(test)
 
 	test:section("RemoteTestHarness")
 
-	local Contract = Contracts.system("HarnessInventory")
-		:action("GrantItem", {
-			input = Contracts.object({
-				ItemId = Contracts.stringId(),
-			}, {
-				allowExtra = false,
-			}),
-			remote = {
-				name = "GrantItem",
-				direction = "server",
-			},
-			policy = {
-				actorRequired = true,
-			},
-		})
+	local Contract = Contracts.system("HarnessInventory"):action("GrantItem", {
+		input = Contracts.object({
+			ItemId = Contracts.stringId(),
+		}, {
+			allowExtra = false,
+		}),
+		remote = {
+			name = "GrantItem",
+			direction = "server",
+		},
+		policy = {
+			actorRequired = true,
+		},
+	})
 
 	local harness = Contracts.Test.remoteHarness(Contract, {
 		defaultResponses = {

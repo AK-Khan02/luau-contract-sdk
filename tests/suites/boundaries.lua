@@ -1,10 +1,10 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 local RateLimiter = require("../../src/Core/RateLimiter")
 local Schema = require("../../src/Core/Schema")
 
-return function(test)
+return function(test: any)
 	test:section("Schema string boundaries")
 
 	local capped = Schema.string({ maxLength = 12 })
@@ -26,38 +26,51 @@ return function(test)
 	-- hot remotes cannot be allowed unbounded allocation.
 	local defaultString = Schema.string()
 	test:expect("default string has a maxLength ceiling", type(defaultString.maxLength), "number")
-	test:expect("string under default ceiling passes",
-		Schema.validate(defaultString, string.rep("a", defaultString.maxLength)).ok, true)
-	test:expect("string over default ceiling fails",
-		Schema.validate(defaultString, string.rep("a", defaultString.maxLength + 1)).ok, false)
-	test:expect("maxLength = false opts out of the ceiling",
-		Schema.string({ maxLength = false }).maxLength, nil)
-	test:expect("explicit maxLength overrides the default",
-		Schema.string({ maxLength = 5 }).maxLength, 5)
+	test:expect(
+		"string under default ceiling passes",
+		Schema.validate(defaultString, string.rep("a", defaultString.maxLength)).ok,
+		true
+	)
+	test:expect(
+		"string over default ceiling fails",
+		Schema.validate(defaultString, string.rep("a", defaultString.maxLength + 1)).ok,
+		false
+	)
+	test:expect("maxLength = false opts out of the ceiling", Schema.string({ maxLength = false }).maxLength, nil)
+	test:expect("explicit maxLength overrides the default", Schema.string({ maxLength = 5 }).maxLength, 5)
 
 	test:section("Schema array boundaries")
 
 	local defaultArray = Schema.arrayOf(Schema.number())
 	test:expect("default array has a maxItems ceiling", type(defaultArray.maxItems), "number")
-	local function numbers(count)
-		local out = {}
+	local function numbers(count: number): { number }
+		local out: { number } = {}
 		for index = 1, count do
 			out[index] = index
 		end
 		return out
 	end
-	test:expect("array at default ceiling passes",
-		Schema.validate(defaultArray, numbers(defaultArray.maxItems)).ok, true)
+	test:expect(
+		"array at default ceiling passes",
+		Schema.validate(defaultArray, numbers(defaultArray.maxItems)).ok,
+		true
+	)
 	local oversized = Schema.validate(defaultArray, numbers(defaultArray.maxItems + 1))
 	test:expect("array over default ceiling fails", oversized.ok, false)
-	test:expectMatch("array ceiling failure names the limit", oversized.reason,
-		"expected array length <= " .. tostring(defaultArray.maxItems))
-	test:expect("maxItems = false opts out of the ceiling",
-		Schema.arrayOf(Schema.number(), { maxItems = false }).maxItems, nil)
-	local capped = Schema.arrayOf(Schema.number(), { maxItems = 2 })
-	test:expect("explicit maxItems is honored", Schema.validate(capped, { 1, 2 }).ok, true)
-	test:expect("explicit maxItems rejects overflow", Schema.validate(capped, { 1, 2, 3 }).ok, false)
-	test:expect("array describe carries maxItems", Schema.describe(capped).maxItems, 2)
+	test:expectMatch(
+		"array ceiling failure names the limit",
+		oversized.reason,
+		"expected array length <= " .. tostring(defaultArray.maxItems)
+	)
+	test:expect(
+		"maxItems = false opts out of the ceiling",
+		Schema.arrayOf(Schema.number(), { maxItems = false }).maxItems,
+		nil
+	)
+	local cappedArray = Schema.arrayOf(Schema.number(), { maxItems = 2 })
+	test:expect("explicit maxItems is honored", Schema.validate(cappedArray, { 1, 2 }).ok, true)
+	test:expect("explicit maxItems rejects overflow", Schema.validate(cappedArray, { 1, 2, 3 }).ok, false)
+	test:expect("array describe carries maxItems", Schema.describe(cappedArray).maxItems, 2)
 
 	test:section("Schema stringId edge inputs")
 
@@ -68,7 +81,11 @@ return function(test)
 	for _, invalid in ipairs({ "", "a b", "../Rifle", "Rifle!", string.rep("a", 81), "tab\tchar" }) do
 		test:expect("stringId rejects " .. string.format("%q", invalid), Schema.validate(id, invalid).ok, false)
 	end
-	test:expectMatch("stringId pattern failure uses its description", Schema.validate(id, "a b").reason, "expected string id")
+	test:expectMatch(
+		"stringId pattern failure uses its description",
+		Schema.validate(id, "a b").reason,
+		"expected string id"
+	)
 
 	test:section("Schema numeric boundaries")
 
@@ -98,14 +115,34 @@ return function(test)
 	test:section("Schema vector3 boundaries")
 
 	local unitish = Schema.vector3({ unitish = true })
-	test:expect("unitish accepts magnitude at lower bound", Schema.validate(unitish, { X = 0.001, Y = 0, Z = 0 }).ok, true)
-	test:expect("unitish accepts magnitude at upper bound", Schema.validate(unitish, { X = 1.25, Y = 0, Z = 0 }).ok, true)
-	test:expect("unitish rejects magnitude below lower bound", Schema.validate(unitish, { X = 0.0009, Y = 0, Z = 0 }).ok, false)
-	test:expect("unitish rejects magnitude above upper bound", Schema.validate(unitish, { X = 1.2501, Y = 0, Z = 0 }).ok, false)
+	test:expect(
+		"unitish accepts magnitude at lower bound",
+		Schema.validate(unitish, { X = 0.001, Y = 0, Z = 0 }).ok,
+		true
+	)
+	test:expect(
+		"unitish accepts magnitude at upper bound",
+		Schema.validate(unitish, { X = 1.25, Y = 0, Z = 0 }).ok,
+		true
+	)
+	test:expect(
+		"unitish rejects magnitude below lower bound",
+		Schema.validate(unitish, { X = 0.0009, Y = 0, Z = 0 }).ok,
+		false
+	)
+	test:expect(
+		"unitish rejects magnitude above upper bound",
+		Schema.validate(unitish, { X = 1.2501, Y = 0, Z = 0 }).ok,
+		false
+	)
 	local zeroVector = Schema.validate(unitish, { X = 0, Y = 0, Z = 0 })
 	test:expect("unitish rejects the zero vector", zeroVector.ok, false)
 	test:expectMatch("unitish failure says unit-ish", zeroVector.reason, "expected unit-ish vector")
-	test:expect("non-finite component is not Vector3-like", Schema.validate(unitish, { X = math.huge, Y = 0, Z = 0 }).ok, false)
+	test:expect(
+		"non-finite component is not Vector3-like",
+		Schema.validate(unitish, { X = math.huge, Y = 0, Z = 0 }).ok,
+		false
+	)
 
 	-- RemoteEvents deliver plain tables, so a client can attach a Magnitude
 	-- field. Magnitude must be computed from the components, never trusted.
@@ -133,7 +170,7 @@ return function(test)
 
 	test:section("Schema custom validators")
 
-	local normalizing = Schema.custom("trimmed", function(value)
+	local normalizing = Schema.custom("trimmed", function(value: any): (any, any?, any?)
 		if type(value) ~= "string" then
 			return "expected a string to trim"
 		end
@@ -157,7 +194,11 @@ return function(test)
 	local terse = Schema.custom("terse", function()
 		return false
 	end)
-	test:expectMatch("custom failure without reason names the validator", Schema.validate(terse, 1).reason, "failed terse validation")
+	test:expectMatch(
+		"custom failure without reason names the validator",
+		Schema.validate(terse, 1).reason,
+		"failed terse validation"
+	)
 
 	local shorthand = Schema.validate(function(value)
 		return value == "ok"
@@ -177,7 +218,11 @@ return function(test)
 	local extraField = Schema.validate(strictObject, { ItemId = "Rifle", Extra = true })
 	test:expect("extra field is rejected", extraField.ok, false)
 	test:expectMatch("extra field failure names the field", extraField.reason, "Extra: unexpected field")
-	test:expect("allowExtra accepts unknown fields", Schema.validate(Schema.object({}, { allowExtra = true }), { Anything = 1 }).ok, true)
+	test:expect(
+		"allowExtra accepts unknown fields",
+		Schema.validate(Schema.object({}, { allowExtra = true }), { Anything = 1 }).ok,
+		true
+	)
 	test:expect("empty strict object accepts empty payload", Schema.validate(Schema.object({}), {}).ok, true)
 	test:expect("empty strict object rejects any field", Schema.validate(Schema.object({}), { x = 1 }).ok, false)
 	test:expect("object rejects non-tables", Schema.validate(strictObject, "nope").ok, false)
@@ -190,7 +235,7 @@ return function(test)
 		Admin = Contracts.boolean(),
 	}, { allowExtra = false })
 	local spoofed = setmetatable({}, {
-		__index = function(_, key)
+		__index = function(_: any, key: any): boolean?
 			if key == "Admin" then
 				return true
 			end

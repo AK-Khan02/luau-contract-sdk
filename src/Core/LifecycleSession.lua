@@ -1,37 +1,20 @@
 --!strict
 
+local Result = require("./Result")
+local TableUtil = require("./TableUtil")
+
 export type Snapshot = {
 	revision: number,
-	states: {[string]: string},
-	history: {any}?,
+	states: { [string]: string },
+	history: { any }?,
 }
 
 local LifecycleSession: any = {}
 LifecycleSession.__index = LifecycleSession
 
-local function copyMap(values: any): any
-	local copy = {}
-	for key, value in pairs(values or {}) do
-		copy[key] = value
-	end
-	return copy
-end
-
-local function copyList(values: {any}): {any}
-	local copy = {}
-	for index, value in ipairs(values) do
-		copy[index] = value
-	end
-	return copy
-end
-
-local function record(diagnostics: any, fields: any): any
-	if diagnostics and diagnostics.record then
-		local target: any = diagnostics
-		return target:record(fields)
-	end
-	return fields
-end
+local copyList = TableUtil.copyList
+local copyMap = TableUtil.copyMap
+local record = Result.record
 
 local function assertRevision(value: any)
 	if type(value) ~= "number" or value < 0 or value % 1 ~= 0 then
@@ -83,7 +66,7 @@ function LifecycleSession.state(self: any, lifecycleName: string): string?
 	return self._states[lifecycleName]
 end
 
-function LifecycleSession.states(self: any): {[string]: string}
+function LifecycleSession.states(self: any): { [string]: string }
 	return copyMap(self._states)
 end
 
@@ -152,8 +135,11 @@ function LifecycleSession.checkRevision(self: any, expectedRevision: any?, diagn
 	end
 
 	local name = "LifecycleStaleRevision"
-	local message = self._system:name() .. " lifecycle session expected revision " .. tostring(expectedRevision)
-		.. " but current revision is " .. tostring(self._revision)
+	local message = self._system:name()
+		.. " lifecycle session expected revision "
+		.. tostring(expectedRevision)
+		.. " but current revision is "
+		.. tostring(self._revision)
 	record(diagnostics, {
 		level = "error",
 		category = "lifecycle",
@@ -170,7 +156,13 @@ function LifecycleSession.checkRevision(self: any, expectedRevision: any?, diagn
 	})
 end
 
-function LifecycleSession.canRun(self: any, actionName: string, diagnostics: any?, context: any?, expectedRevision: number?): any
+function LifecycleSession.canRun(
+	self: any,
+	actionName: string,
+	diagnostics: any?,
+	context: any?,
+	expectedRevision: number?
+): any
 	local revision = self:checkRevision(expectedRevision, diagnostics, context)
 	if not revision.ok then
 		return result(false, revision.name, {
@@ -189,7 +181,7 @@ function LifecycleSession.canRun(self: any, actionName: string, diagnostics: any
 	})
 end
 
-function LifecycleSession._remember(self: any, actionName: string, transitions: {any}, previousRevision: number)
+function LifecycleSession._remember(self: any, actionName: string, transitions: { any }, previousRevision: number)
 	if #transitions == 0 then
 		return
 	end
@@ -207,7 +199,13 @@ function LifecycleSession._remember(self: any, actionName: string, transitions: 
 	end
 end
 
-function LifecycleSession.apply(self: any, actionName: string, diagnostics: any?, context: any?, expectedRevision: number?): any
+function LifecycleSession.apply(
+	self: any,
+	actionName: string,
+	diagnostics: any?,
+	context: any?,
+	expectedRevision: number?
+): any
 	local revision = self:checkRevision(expectedRevision, diagnostics, context)
 	if not revision.ok then
 		return result(false, revision.name, {

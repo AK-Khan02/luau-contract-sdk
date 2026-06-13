@@ -66,11 +66,11 @@ function ActionScope.diagnostics(self: any): any?
 	return self._diagnostics
 end
 
-function ActionScope.effects(self: any): {Effect}
+function ActionScope.effects(self: any): { Effect }
 	return self._effectPlan:effects()
 end
 
-function ActionScope.eagerMutations(self: any): {any}
+function ActionScope.eagerMutations(self: any): { any }
 	return self._effectPlan:eagerMutations()
 end
 

@@ -1,3 +1,5 @@
+--!strict
+
 local AsyncGate = require("./Core/AsyncGate")
 local Diagnostics = require("./Core/Diagnostics")
 local DiagnosticReport = require("./Core/DiagnosticReport")
@@ -16,6 +18,21 @@ local StaticScanner = require("./Core/StaticScanner")
 local Studio = require("./Studio")
 local System = require("./Core/System")
 local Test = require("./Test")
+
+local function freezeTable(value: any): any
+	local freeze = table.freeze
+	if freeze ~= nil then
+		local freezeFn = freeze :: (any) -> any
+		return freezeFn(value)
+	end
+	return value
+end
+
+local PUBLIC_API_STATUS = freezeTable({
+	stable = "stable",
+	experimental = "experimental",
+	internal = "internal",
+})
 
 local Contracts = {
 	AsyncGate = AsyncGate,
@@ -89,5 +106,119 @@ Contracts.string = Schema.string
 Contracts.stringId = Schema.stringId
 Contracts.vector3 = Schema.vector3
 Contracts.validate = Schema.validate
+
+local STABLE_API_NAMES = freezeTable({
+	"Public",
+	"Experimental",
+	"Internal",
+	"publicApi",
+	"diagnostics",
+	"lifecycle",
+	"lifecycleSession",
+	"runtime",
+	"system",
+	"guardRemote",
+	"cancelOnLeave",
+	"publishDiagnostics",
+	"publishRelay",
+	"any",
+	"arrayOf",
+	"boolean",
+	"custom",
+	"integer",
+	"literal",
+	"number",
+	"object",
+	"oneOf",
+	"optional",
+	"string",
+	"stringId",
+	"vector3",
+	"validate",
+	"Schema",
+	"Diagnostics",
+	"DiagnosticReport",
+	"Lifecycle",
+	"LifecycleSession",
+	"Runtime",
+	"System",
+	"version",
+})
+
+local EXPERIMENTAL_API_NAMES = freezeTable({
+	"EffectPlan",
+	"Host",
+	"OverlayFeed",
+	"Roblox",
+	"StaticScanner",
+	"Studio",
+	"Test",
+})
+
+local INTERNAL_API_NAMES = freezeTable({
+	"AsyncGate",
+	"Invariant",
+	"Package",
+	"RateLimiter",
+})
+
+Contracts.Public = freezeTable({
+	diagnostics = Contracts.diagnostics,
+	lifecycle = Contracts.lifecycle,
+	lifecycleSession = Contracts.lifecycleSession,
+	runtime = Contracts.runtime,
+	system = Contracts.system,
+	guardRemote = Contracts.guardRemote,
+	cancelOnLeave = Contracts.cancelOnLeave,
+	publishDiagnostics = Contracts.publishDiagnostics,
+	publishRelay = Contracts.publishRelay,
+	any = Contracts.any,
+	arrayOf = Contracts.arrayOf,
+	boolean = Contracts.boolean,
+	custom = Contracts.custom,
+	integer = Contracts.integer,
+	literal = Contracts.literal,
+	number = Contracts.number,
+	object = Contracts.object,
+	oneOf = Contracts.oneOf,
+	optional = Contracts.optional,
+	string = Contracts.string,
+	stringId = Contracts.stringId,
+	vector3 = Contracts.vector3,
+	validate = Contracts.validate,
+	Schema = Schema,
+	Diagnostics = Diagnostics,
+	DiagnosticReport = DiagnosticReport,
+	Lifecycle = Lifecycle,
+	LifecycleSession = LifecycleSession,
+	Runtime = Runtime,
+	System = System,
+	version = Package.version,
+})
+
+Contracts.Experimental = freezeTable({
+	EffectPlan = EffectPlan,
+	Host = Host,
+	OverlayFeed = OverlayFeed,
+	Roblox = Roblox,
+	StaticScanner = StaticScanner,
+	Studio = Studio,
+	Test = Test,
+})
+
+Contracts.Internal = freezeTable({
+	AsyncGate = AsyncGate,
+	Invariant = Invariant,
+	Package = Package,
+	RateLimiter = RateLimiter,
+})
+
+Contracts.publicApi = freezeTable({
+	version = 1,
+	status = PUBLIC_API_STATUS,
+	stable = STABLE_API_NAMES,
+	experimental = EXPERIMENTAL_API_NAMES,
+	internal = INTERNAL_API_NAMES,
+})
 
 return Contracts

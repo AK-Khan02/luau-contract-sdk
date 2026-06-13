@@ -2,14 +2,14 @@
 
 export type Description = {
 	name: string,
-	states: {string},
-	transitions: {[string]: {[string]: string}},
+	states: { string },
+	transitions: { [string]: { [string]: string } },
 }
 
 local Lifecycle: any = {}
 Lifecycle.__index = Lifecycle
 
-local function copyList(values: {string}): {string}
+local function copyList(values: { string }): { string }
 	local copy = {}
 	for index, value in ipairs(values) do
 		copy[index] = value
@@ -17,7 +17,7 @@ local function copyList(values: {string}): {string}
 	return copy
 end
 
-local function copyTransitions(transitions: {[string]: {[string]: string}}): {[string]: {[string]: string}}
+local function copyTransitions(transitions: { [string]: { [string]: string } }): { [string]: { [string]: string } }
 	local copy = {}
 	for state, events in pairs(transitions) do
 		copy[state] = {}

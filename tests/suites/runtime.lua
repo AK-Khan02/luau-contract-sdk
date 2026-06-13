@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 
@@ -31,8 +31,7 @@ return function(test)
 
 	test:section("Runtime")
 
-	local InventoryLifecycle = Contracts.lifecycle("Inventory")
-		:transition("Ready", "GrantItem", "Ready")
+	local InventoryLifecycle = Contracts.lifecycle("Inventory"):transition("Ready", "GrantItem", "Ready")
 
 	local GrantInput = Contracts.object({
 		ItemId = Contracts.stringId(),
@@ -167,17 +166,30 @@ return function(test)
 		revision = "Revision",
 	})
 
-	check("runtime invokes action through system runner", directResult.ok == true and directResult.value.itemId == "Rifle")
-	check("runtime handler receives normalized request", seenRequest.action == "GrantItem" and seenRequest.actor == admin)
-	check("normalized request carries the payload", seenRequest.payload ~= nil
-		and seenRequest.payload.ItemId == "Rifle" and seenRequest.payload.Revision == 0)
-	check("normalized request carries caller context", seenRequest.context ~= nil
-		and seenRequest.context.inventory == inventory)
+	check(
+		"runtime invokes action through system runner",
+		directResult.ok == true and directResult.value.itemId == "Rifle"
+	)
+	check(
+		"runtime handler receives normalized request",
+		seenRequest.action == "GrantItem" and seenRequest.actor == admin
+	)
+	check(
+		"normalized request carries the payload",
+		seenRequest.payload ~= nil and seenRequest.payload.ItemId == "Rifle" and seenRequest.payload.Revision == 0
+	)
+	check(
+		"normalized request carries caller context",
+		seenRequest.context ~= nil and seenRequest.context.inventory == inventory
+	)
 	check("normalized request resolves the revision field path", seenRequest.expectedRevision == 0)
 	check("normalized request keeps the session name", seenRequest.sessionName == "inventory")
 	check("normalized request defaults to runtime diagnostics", seenRequest.diagnostics == runtime:diagnostics())
 	check("runtime resolves named lifecycle session", sessions.Admin:revision() == 1)
-	check("runtime action records scoped effects", #directResult.effects == 2 and directResult.effects[2].kind == "write")
+	check(
+		"runtime action records scoped effects",
+		#directResult.effects == 2 and directResult.effects[2].kind == "write"
+	)
 
 	local missingSession = runtime:invoke("GrantItem", {
 		actor = admin,
@@ -190,7 +202,10 @@ return function(test)
 		},
 		sessionName = "missing",
 	})
-	check("runtime reports missing named session", missingSession.ok == false and missingSession.name == "LifecycleSessionMissing")
+	check(
+		"runtime reports missing named session",
+		missingSession.ok == false and missingSession.name == "LifecycleSessionMissing"
+	)
 	check("runtime records missing named session", diagnostics:last().name == "LifecycleSessionMissing")
 
 	local remoteFunction = {}
@@ -211,7 +226,10 @@ return function(test)
 		ItemId = "Shield",
 		Revision = 0,
 	})
-	check("runtime binds remote to registered action implementation", remoteResult ~= nil and remoteResult.itemId == "Shield")
+	check(
+		"runtime binds remote to registered action implementation",
+		remoteResult ~= nil and remoteResult.itemId == "Shield"
+	)
 	check("runtime remote commits lifecycle session", remoteSession:revision() == 1)
 
 	local user = {
@@ -231,21 +249,20 @@ return function(test)
 	})
 	check("runtime remote enforces rate limits", limited == nil and diagnostics:last().name == "RemoteRateLimited")
 
-	local BadResponseContract = Contracts.system("BadResponseService")
-		:action("BadPing", {
-			input = Contracts.object({}, {
+	local BadResponseContract = Contracts.system("BadResponseService"):action("BadPing", {
+		input = Contracts.object({}, {
+			allowExtra = false,
+		}),
+		remote = {
+			name = "BadPing",
+			direction = "server",
+			response = Contracts.object({
+				ok = Contracts.boolean(),
+			}, {
 				allowExtra = false,
 			}),
-			remote = {
-				name = "BadPing",
-				direction = "server",
-				response = Contracts.object({
-					ok = Contracts.boolean(),
-				}, {
-					allowExtra = false,
-				}),
-			},
-		})
+		},
+	})
 
 	local badResponseDiagnostics = Contracts.diagnostics()
 	local badRuntime = Contracts.runtime(BadResponseContract, {
@@ -260,18 +277,24 @@ return function(test)
 	local badRemote = {}
 	badRuntime:bindRemote("BadPing", badRemote)
 	local badResponse = badRemote.OnServerInvoke(admin, {})
-	check("runtime remote validates response schema", badResponse == nil and badResponseDiagnostics:last().name == "RemoteResponseInvalid")
+	check(
+		"runtime remote validates response schema",
+		badResponse == nil and badResponseDiagnostics:last().name == "RemoteResponseInvalid"
+	)
 
-	local LegacyContract = Contracts.system("LegacyService")
-		:remote("Ping", Contracts.object({}, {
+	local LegacyContract = Contracts.system("LegacyService"):remote(
+		"Ping",
+		Contracts.object({}, {
 			allowExtra = false,
-		}), {
+		}),
+		{
 			response = Contracts.object({
 				ok = Contracts.boolean(),
 			}, {
 				allowExtra = false,
 			}),
-		})
+		}
+	)
 	local legacyRuntime = Contracts.runtime(LegacyContract)
 	local legacyRemote = {}
 	legacyRuntime:bindRemotes({

@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 local RemoteGuard = require("../../src/Roblox/RemoteGuard")
@@ -74,28 +74,44 @@ return function(test)
 	local description = grantContract:describe()
 	check("system describes actions", description.actions.GrantItem.reads[1] == "Catalog.Items")
 	check("action remote is registered", grantContract:actionForRemote("GrantItem") == "GrantItem")
-	check("action remote options include rate limit", grantContract:remoteOptions("GrantItem").rateLimit.maxRequests == 4)
+	local describedAction = assert(grantContract:actionOptions("GrantItem"))
+	describedAction.lifecycle.requires.Inventory = "Locked"
+	check(
+		"action options returns immutable lifecycle policy data",
+		grantContract:checkActionLifecycle("GrantItem", { Inventory = "Ready" }).ok == true
+	)
+	local grantRemoteOptions = assert(grantContract:remoteOptions("GrantItem"))
+	check("action remote options include rate limit", grantRemoteOptions.rateLimit.maxRequests == 4)
 	check("action input validates", grantContract:validateActionInput("GrantItem", { ItemId = "Rifle" }).ok == true)
 
-	local quickRemoteContract = Contracts.system("QuickRemoteService")
-		:remote("GrantItem", {
-			input = GrantItemInput,
-			output = GrantItemOutput,
-			actor = "required",
-			rateLimit = {
-				maxRequests = 2,
-				windowSeconds = 1,
-			},
-		})
-	local quickRemoteOptions = quickRemoteContract:remoteOptions("GrantItem")
-	check("remote table form validates input", quickRemoteContract:validateRemote("GrantItem", { ItemId = "Rifle" }).ok == true)
-	check("remote table form stores output as response", quickRemoteOptions.response ~= nil
-		and quickRemoteOptions.response.kind == "object"
-		and quickRemoteOptions.response.shape.granted ~= nil
-		and quickRemoteOptions.response.shape.itemId ~= nil
-		and quickRemoteOptions.response.allowExtra == false)
-	check("remote response schema rejects malformed responses",
-		Contracts.validate(quickRemoteOptions.response, { granted = "yes", itemId = "Rifle" }).ok == false)
+	local quickRemoteContract = Contracts.system("QuickRemoteService"):remote("GrantItem", {
+		input = GrantItemInput,
+		output = GrantItemOutput,
+		actor = "required",
+		rateLimit = {
+			maxRequests = 2,
+			windowSeconds = 1,
+		},
+	})
+	local quickRemoteOptions = assert(quickRemoteContract:remoteOptions("GrantItem"))
+	local quickResponse: any = quickRemoteOptions.response
+	local quickResponseShape: any = quickResponse and quickResponse.shape
+	check(
+		"remote table form validates input",
+		quickRemoteContract:validateRemote("GrantItem", { ItemId = "Rifle" }).ok == true
+	)
+	check(
+		"remote table form stores output as response",
+		quickResponse ~= nil
+			and quickResponse.kind == "object"
+			and quickResponseShape.granted ~= nil
+			and quickResponseShape.itemId ~= nil
+			and quickResponse.allowExtra == false
+	)
+	check(
+		"remote response schema rejects malformed responses",
+		Contracts.validate(quickResponse, { granted = "yes", itemId = "Rifle" }).ok == false
+	)
 	check("remote table form stores actor policy", quickRemoteOptions.actor == "required")
 
 	local diagnostics = Contracts.diagnostics()
@@ -128,7 +144,10 @@ return function(test)
 
 	check("action runner succeeds", result.ok == true and result.value.itemId == "Rifle")
 	check("action runner records effects", #result.effects == 2 and result.effects[1].kind == "read")
-	check("action runner reduces lifecycle", result.lifecycle.states.Inventory == "Ready" and #result.lifecycle.transitions == 1)
+	check(
+		"action runner reduces lifecycle",
+		result.lifecycle.states.Inventory == "Ready" and #result.lifecycle.transitions == 1
+	)
 	check("action runner avoids diagnostics on success", diagnostics:count() == 0)
 
 	local invalidInventory = {}
@@ -204,8 +223,11 @@ return function(test)
 	end)
 	check("rejected write leaves the inventory untouched", next(writeInventory) == nil)
 	check("action scope rejects undeclared write", badWrite.ok == false and badWrite.name == "WriteNotAllowed")
-	test:expectMatch("undeclared write diagnostic names the path",
-		writeDiagnostics:last().message, "InventoryService.GrantItem may not write Player.Profile")
+	test:expectMatch(
+		"undeclared write diagnostic names the path",
+		writeDiagnostics:last().message,
+		"InventoryService.GrantItem may not write Player.Profile"
+	)
 	check("action scope records undeclared write", writeDiagnostics:last().name == "WriteNotAllowed")
 
 	local forbiddenInventory = {}
@@ -232,7 +254,10 @@ return function(test)
 		end)
 	end)
 	check("forbidden touch leaves the inventory untouched", next(forbiddenInventory) == nil)
-	check("action scope rejects forbidden touch", forbiddenTouch.ok == false and forbiddenTouch.name == "ForbiddenTouch")
+	check(
+		"action scope rejects forbidden touch",
+		forbiddenTouch.ok == false and forbiddenTouch.name == "ForbiddenTouch"
+	)
 	check("action scope records forbidden touch", forbiddenDiagnostics:last().name == "ForbiddenTouch")
 
 	local outputInventory = {}
@@ -280,7 +305,10 @@ return function(test)
 		}
 	end)
 	check("action runner checks lifecycle state", invalidLifecycle.ok == false)
-	check("action runner records lifecycle state failure", lifecycleDiagnostics:last().name == "ActionLifecycleStateInvalid")
+	check(
+		"action runner records lifecycle state failure",
+		lifecycleDiagnostics:last().name == "ActionLifecycleStateInvalid"
+	)
 
 	local actorDiagnostics = Contracts.diagnostics()
 	local missingActor = grantContract:runAction("GrantItem", {
@@ -336,7 +364,10 @@ return function(test)
 
 	local readAllowed = permissionContract:checkRead("Player.Profile.Level")
 	local readDenied = permissionContract:checkRead("Player.Inventory")
-	check("standalone read allows declared boundary", readAllowed.ok == true and readAllowed.matchedSystemBoundary == "Player.Profile")
+	check(
+		"standalone read allows declared boundary",
+		readAllowed.ok == true and readAllowed.matchedSystemBoundary == "Player.Profile"
+	)
 	check("standalone read rejects undeclared boundary", readDenied.ok == false and readDenied.name == "ReadNotAllowed")
 
 	local writeAllowed = permissionContract:checkWrite("Player.Inventory.Items.Rifle")
@@ -354,18 +385,30 @@ return function(test)
 
 	local forbiddenReadDiagnostics = Contracts.diagnostics()
 	local forbiddenRead = permissionContract:checkRead("Workspace.Map.Tile", forbiddenReadDiagnostics)
-	check("forbidden boundary rejects reads", forbiddenRead.ok == false and forbiddenRead.name == "ForbiddenTouch" and forbiddenRead.strict == true)
-	check("forbidden boundary records matched boundary", forbiddenReadDiagnostics:last().context.boundary == "Workspace.Map")
+	check(
+		"forbidden boundary rejects reads",
+		forbiddenRead.ok == false and forbiddenRead.name == "ForbiddenTouch" and forbiddenRead.strict == true
+	)
+	check(
+		"forbidden boundary records matched boundary",
+		forbiddenReadDiagnostics:last().context.boundary == "Workspace.Map"
+	)
 
 	local actionReadAllowed = permissionContract:checkActionRead("GrantItem", "Player.Profile.Public.DisplayName")
 	local actionReadDenied = permissionContract:checkActionRead("GrantItem", "Player.Profile.Private.Email")
 	check("action read allows narrowed boundary", actionReadAllowed.ok == true)
-	check("action read rejects outside narrowed boundary", actionReadDenied.ok == false and actionReadDenied.name == "ReadNotAllowed")
+	check(
+		"action read rejects outside narrowed boundary",
+		actionReadDenied.ok == false and actionReadDenied.name == "ReadNotAllowed"
+	)
 
 	local actionWriteAllowed = permissionContract:checkActionWrite("GrantItem", "Player.Inventory.Items.Rifle")
 	local actionWriteDenied = permissionContract:checkActionWrite("GrantItem", "Player.Inventory.Currency")
 	check("action write allows narrowed boundary", actionWriteAllowed.ok == true)
-	check("action write rejects outside narrowed boundary", actionWriteDenied.ok == false and actionWriteDenied.action == "GrantItem")
+	check(
+		"action write rejects outside narrowed boundary",
+		actionWriteDenied.ok == false and actionWriteDenied.action == "GrantItem"
+	)
 
 	local actionCreateAllowed = permissionContract:checkActionEffect("GrantItem", {
 		kind = "create",
@@ -381,7 +424,10 @@ return function(test)
 	})
 	check("action effect allows declared create", actionCreateAllowed.ok == true)
 	check("legacy action effect overload still works", legacyActionCreateAllowed.ok == true)
-	check("action effect forbids action-specific boundary", actionTouchForbidden.ok == false and actionTouchForbidden.name == "ForbiddenTouch")
+	check(
+		"action effect forbids action-specific boundary",
+		actionTouchForbidden.ok == false and actionTouchForbidden.name == "ForbiddenTouch"
+	)
 
 	local batch = permissionContract:checkEffects({
 		{
@@ -405,15 +451,19 @@ return function(test)
 			target = "Player.Inventory.Currency",
 		},
 	})
-	check("action batch effects apply action boundaries", actionBatch.ok == false and actionBatch.failures[1].name == "DestroyNotAllowed")
+	check(
+		"action batch effects apply action boundaries",
+		actionBatch.ok == false and actionBatch.failures[1].name == "DestroyNotAllowed"
+	)
 
 	local permissiveContract = Contracts.system("PermissiveService")
 	local permissiveRead = permissiveContract:checkRead("Anywhere.Path")
-	local strictDenied = Contracts.system("StrictService")
-		:strictPermissions()
-		:checkRead("Anywhere.Path")
+	local strictDenied = Contracts.system("StrictService"):strictPermissions():checkRead("Anywhere.Path")
 	check("non-strict empty permissions allow access by default", permissiveRead.ok == true)
-	check("strict empty permissions deny by default", strictDenied.ok == false and strictDenied.name == "ReadNotAllowed")
+	check(
+		"strict empty permissions deny by default",
+		strictDenied.ok == false and strictDenied.name == "ReadNotAllowed"
+	)
 
 	test:section("ActionBoundRemotes")
 
@@ -433,7 +483,7 @@ return function(test)
 			},
 		})
 
-	local connectedHandler = nil
+	local connectedHandler: ((any, any) -> any)? = nil
 	local fakeRemote = {
 		OnServerEvent = {
 			Connect = function(_, handler)
@@ -460,12 +510,13 @@ return function(test)
 		},
 	})
 
-	local remoteResult = connectedHandler("PlayerA", {
+	local handler = assert(connectedHandler, "expected RemoteGuard to connect action-bound remote")
+	local remoteResult = handler("PlayerA", {
 		ItemId = "Rifle",
 	})
 	check("remote guard runs action-bound remote", remoteResult ~= nil and remoteResult.itemId == "Rifle")
 
-	connectedHandler("PlayerA", {
+	handler("PlayerA", {
 		ItemId = "../Rifle",
 	})
 	check("remote guard records action input failure", remoteDiagnostics:last().name == "ActionInputInvalid")

@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 
@@ -33,16 +33,23 @@ return function(test)
 	local diagnosticReport = diagnostics:report({ recentLimit = 1 })
 	check("diagnostic report counts records", diagnosticReport.total == 2 and diagnosticReport.dropped == 1)
 	check("diagnostic report counts systems", diagnosticReport.counts.bySystem.Beta == 2)
-	check("diagnostic report limits recent records", #diagnosticReport.recent == 1 and diagnosticReport.recent[1].name == "C")
+	check(
+		"diagnostic report limits recent records",
+		#diagnosticReport.recent == 1 and diagnosticReport.recent[1].name == "C"
+	)
 	local formatted = diagnostics:formatReport({ recentLimit = 1 })
 	local formattedLines = {}
 	for line in string.gmatch(formatted, "[^\n]+") do
 		table.insert(formattedLines, line)
 	end
-	check("diagnostic report header carries totals",
-		formattedLines[1] == "diagnostics: total=2 dropped=1 failures=true")
-	check("diagnostic report lists the recent entry",
-		#formattedLines == 2 and formattedLines[2] == "[error] C system=Beta category=remote third")
+	check(
+		"diagnostic report header carries totals",
+		formattedLines[1] == "diagnostics: total=2 dropped=1 failures=true"
+	)
+	check(
+		"diagnostic report lists the recent entry",
+		#formattedLines == 2 and formattedLines[2] == "[error] C system=Beta category=remote third"
+	)
 
 	local subscriberDiagnostics = Contracts.diagnostics()
 	local observed = {}
@@ -76,12 +83,15 @@ return function(test)
 		:mayRead("Player.Character")
 		:mayWrite("Player.Backpack")
 		:mustNeverTouch("Workspace.CurrentArena")
-		:remote("WeaponAction", Contracts.object({
-			Action = Contracts.oneOf({ "Fire", "Reload" }),
-			WeaponId = Contracts.stringId(),
-		}, {
-			allowExtra = false,
-		}))
+		:remote(
+			"WeaponAction",
+			Contracts.object({
+				Action = Contracts.oneOf({ "Fire", "Reload" }),
+				WeaponId = Contracts.stringId(),
+			}, {
+				allowExtra = false,
+			})
+		)
 		:postcondition("PlayerHasWeapon", function(context)
 			return context.weaponCount == 1
 		end)
@@ -95,11 +105,8 @@ return function(test)
 	)
 
 	local systemDiagnostics = Contracts.diagnostics()
-	local badRemote = weaponContract:validateRemote(
-		"WeaponAction",
-		{ Action = "Exploit", WeaponId = "Rifle" },
-		systemDiagnostics
-	)
+	local badRemote =
+		weaponContract:validateRemote("WeaponAction", { Action = "Exploit", WeaponId = "Rifle" }, systemDiagnostics)
 	check("system rejects invalid remote payload", badRemote.ok == false)
 	check("system records invalid remote payload", systemDiagnostics:last().name == "RemotePayloadInvalid")
 
@@ -112,7 +119,10 @@ return function(test)
 	local postconditionsOk = weaponContract:checkPostconditions({ weaponCount = 1 }, postconditionDiagnostics)
 	local postconditionsBad = weaponContract:checkPostconditions({ weaponCount = 0 }, postconditionDiagnostics)
 	check("system accepts passing postconditions", postconditionsOk.ok == true)
-	check("system records failing postconditions", postconditionsBad.ok == false and postconditionDiagnostics:last().name == "PlayerHasWeapon")
+	check(
+		"system records failing postconditions",
+		postconditionsBad.ok == false and postconditionDiagnostics:last().name == "PlayerHasWeapon"
+	)
 
 	test:section("RateLimiter")
 

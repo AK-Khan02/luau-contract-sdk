@@ -47,7 +47,7 @@ local function copyEntry(entry: DiagnosticEntry): DiagnosticEntry
 	return copy
 end
 
-local function copyList(values: {DiagnosticEntry}): {DiagnosticEntry}
+local function copyList(values: { DiagnosticEntry }): { DiagnosticEntry }
 	local copy = {}
 	for index, value in ipairs(values) do
 		copy[index] = copyEntry(value)
@@ -144,7 +144,7 @@ function Diagnostics.subscribe(self: any, listener: (DiagnosticEntry) -> (), opt
 	end
 end
 
-function Diagnostics.list(self: any): {DiagnosticEntry}
+function Diagnostics.list(self: any): { DiagnosticEntry }
 	return copyList(self._records)
 end
 
@@ -178,7 +178,7 @@ function Diagnostics.hasFailures(self: any): boolean
 	return false
 end
 
-function Diagnostics.find(self: any, query: Query?): {DiagnosticEntry}
+function Diagnostics.find(self: any, query: Query?): { DiagnosticEntry }
 	query = query or {}
 
 	local matches = {}
@@ -197,7 +197,7 @@ function Diagnostics.find(self: any, query: Query?): {DiagnosticEntry}
 	return matches
 end
 
-function Diagnostics.findByName(self: any, name: string): {DiagnosticEntry}
+function Diagnostics.findByName(self: any, name: string): { DiagnosticEntry }
 	return self:find({
 		name = name,
 	})
@@ -210,7 +210,7 @@ function Diagnostics.report(self: any, options: any?): Report
 	}, options)
 end
 
-function Diagnostics.formatEntry(self: any, entry: DiagnosticEntry): string
+function Diagnostics.formatEntry(_self: any, entry: DiagnosticEntry): string
 	return DiagnosticReport.formatEntry(entry)
 end
 

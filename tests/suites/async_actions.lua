@@ -1,27 +1,26 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local AsyncGate = require("../../src/Core/AsyncGate")
 local ManualScheduler = require("../../src/Test/ManualScheduler")
 
 local function buildInventory()
-	return Contracts.system("InventoryService")
-		:action("GrantItem", {
-			input = Contracts.object({
-				id = Contracts.stringId(),
-			}, {
-				allowExtra = false,
-			}),
-			output = Contracts.object({
-				granted = Contracts.boolean(),
-			}, {
-				allowExtra = false,
-			}),
-			writes = { "PlayerData/Inventory" },
-			async = {
-				timeoutSeconds = 5,
-			},
-		})
+	return Contracts.system("InventoryService"):action("GrantItem", {
+		input = Contracts.object({
+			id = Contracts.stringId(),
+		}, {
+			allowExtra = false,
+		}),
+		output = Contracts.object({
+			granted = Contracts.boolean(),
+		}, {
+			allowExtra = false,
+		}),
+		writes = { "PlayerData/Inventory" },
+		async = {
+			timeoutSeconds = 5,
+		},
+	})
 end
 
 return function(test)
@@ -95,7 +94,10 @@ return function(test)
 			return { ok = true }
 		end)
 	end)
-	check("reject concurrency fails fast with ActionBusy", rejected ~= nil and rejected.ok == false and rejected.name == "ActionBusy")
+	check(
+		"reject concurrency fails fast with ActionBusy",
+		rejected ~= nil and rejected.ok == false and rejected.name == "ActionBusy"
+	)
 
 	yieldingRun("second", "serialize")
 	check("serialize concurrency queues behind in-flight call", threads.second == nil and results.second == nil)
@@ -126,11 +128,21 @@ return function(test)
 	check("timed call waits before deadline", timeoutResult == nil)
 	gateSched.advance(3)
 	check("gate times out stuck calls", timeoutResult ~= nil and timeoutResult.name == "ActionTimeout")
-	test:expectMatch("timeout failure names the action and deadline", timeoutResult.reason, "GrantItem timed out after 3 seconds")
-	check("timeout cancels the token", timeoutToken ~= nil and timeoutToken:isCancelled() and timeoutToken:reason() == "timeout")
+	test:expectMatch(
+		"timeout failure names the action and deadline",
+		timeoutResult.reason,
+		"GrantItem timed out after 3 seconds"
+	)
+	check(
+		"timeout cancels the token",
+		timeoutToken ~= nil and timeoutToken:isCancelled() and timeoutToken:reason() == "timeout"
+	)
 	check("timeout records a diagnostic", #timeoutDiag:findByName("ActionTimeout") == 1)
-	test:expectMatch("timeout diagnostic message names the action and deadline",
-		timeoutDiag:findByName("ActionTimeout")[1].message, "GrantItem timed out after 3 seconds")
+	test:expectMatch(
+		"timeout diagnostic message names the action and deadline",
+		timeoutDiag:findByName("ActionTimeout")[1].message,
+		"GrantItem timed out after 3 seconds"
+	)
 
 	gateSched.spawn(threads.slow)
 	check("late completion after timeout is discarded", timeoutResult.name == "ActionTimeout")
@@ -197,11 +209,17 @@ return function(test)
 	check("serialize is the default with a session", #order == 1 and order[1] == "start:sword")
 
 	runtimeSched.spawn(handlerThreads.sword)
-	check("first async action commits", invokeResults[1] ~= nil and invokeResults[1].ok == true and commits[1] == "sword")
+	check(
+		"first async action commits",
+		invokeResults[1] ~= nil and invokeResults[1].ok == true and commits[1] == "sword"
+	)
 	check("queued duplicate starts only after first settles", order[3] == "start:shield")
 
 	runtimeSched.spawn(handlerThreads.shield)
-	check("queued duplicate commits second", invokeResults[2] ~= nil and invokeResults[2].ok == true and commits[2] == "shield")
+	check(
+		"queued duplicate commits second",
+		invokeResults[2] ~= nil and invokeResults[2].ok == true and commits[2] == "shield"
+	)
 	check("exactly one commit per call", #commits == 2 and #rollbacks == 0)
 
 	local commitsBeforeStale = #commits
@@ -212,50 +230,67 @@ return function(test)
 		states = session:states(),
 	})
 	runtimeSched.spawn(handlerThreads.bow)
-	check("stale revision after yield refuses to apply", invokeResults[3] ~= nil and invokeResults[3].ok == false
-		and invokeResults[3].name == "LifecycleStaleRevision")
-	check("stale revision compensates the staged commit",
-		#commits == commitsBeforeStale + 1 and commits[#commits] == "bow")
-	check("stale revision rolls staged effects back",
-		#rollbacks == rollbacksBeforeStale + 1 and rollbacks[#rollbacks] == "bow")
+	check(
+		"stale revision after yield refuses to apply",
+		invokeResults[3] ~= nil and invokeResults[3].ok == false and invokeResults[3].name == "LifecycleStaleRevision"
+	)
+	check(
+		"stale revision compensates the staged commit",
+		#commits == commitsBeforeStale + 1 and commits[#commits] == "bow"
+	)
+	check(
+		"stale revision rolls staged effects back",
+		#rollbacks == rollbacksBeforeStale + 1 and rollbacks[#rollbacks] == "bow"
+	)
 	check("stale revision records a diagnostic", #diagnostics:findByName("LifecycleStaleRevision") >= 1)
-	test:expectMatch("stale revision diagnostic explains expected vs current",
+	test:expectMatch(
+		"stale revision diagnostic explains expected vs current",
 		diagnostics:findByName("LifecycleStaleRevision")[1].message,
-		"expected revision 0 but current revision is 1")
+		"expected revision 0 but current revision is 1"
+	)
 
 	local commitsBeforeTimeout = #commits
 	invokeAsync(4, "axe")
 	runtimeSched.advance(5)
-	check("async action times out via contract policy", invokeResults[4] ~= nil and invokeResults[4].name == "ActionTimeout")
+	check(
+		"async action times out via contract policy",
+		invokeResults[4] ~= nil and invokeResults[4].name == "ActionTimeout"
+	)
 
 	runtimeSched.spawn(handlerThreads.axe)
 	check("timed-out handler cannot commit", #commits == commitsBeforeTimeout)
 	check("commit-boundary cancellation is recorded", #diagnostics:findByName("ActionCancelled") == 1)
-	test:expectMatch("cancellation diagnostic explains the discard",
+	test:expectMatch(
+		"cancellation diagnostic explains the discard",
 		diagnostics:findByName("ActionCancelled")[1].message,
-		"InventoryService.GrantItem was cancelled (timeout); staged effects were discarded")
+		"InventoryService.GrantItem was cancelled (timeout); staged effects were discarded"
+	)
 
 	invokeAsync(5, "lance")
 	runtimeSched.spawn(handlerThreads.lance)
-	check("gate recovers after timeout", invokeResults[5] ~= nil and invokeResults[5].ok == true
-		and commits[#commits] == "lance" and #commits == commitsBeforeTimeout + 1)
+	check(
+		"gate recovers after timeout",
+		invokeResults[5] ~= nil
+			and invokeResults[5].ok == true
+			and commits[#commits] == "lance"
+			and #commits == commitsBeforeTimeout + 1
+	)
 
 	local destroyDiag = Contracts.diagnostics()
-	local rejectSystem = Contracts.system("RejectService")
-		:action("Reserve", {
-			input = Contracts.object({}, { allowExtra = false }),
-			async = {
-				concurrency = "reject",
-				timeoutSeconds = false,
-			},
-		})
+	local rejectSystem = Contracts.system("RejectService"):action("Reserve", {
+		input = Contracts.object({}, { allowExtra = false }),
+		async = {
+			concurrency = "reject",
+			timeoutSeconds = false,
+		},
+	})
 	local rejectSched = ManualScheduler.new()
 	local rejectRuntime = Contracts.runtime(rejectSystem, {
 		diagnostics = destroyDiag,
 		scheduler = rejectSched,
 	})
 	local rejectThreads = {}
-	rejectRuntime:implement("Reserve", function(scope)
+	rejectRuntime:implement("Reserve", function(_scope)
 		table.insert(rejectThreads, coroutine.running())
 		coroutine.yield()
 		return nil
@@ -269,11 +304,16 @@ return function(test)
 	rejectSched.spawn(function()
 		rejectResults[2] = rejectRuntime:invoke("Reserve", { payload = {}, actor = actor })
 	end)
-	check("reject policy returns ActionBusy for in-flight duplicates", rejectResults[2] ~= nil
-		and rejectResults[2].name == "ActionBusy")
+	check(
+		"reject policy returns ActionBusy for in-flight duplicates",
+		rejectResults[2] ~= nil and rejectResults[2].name == "ActionBusy"
+	)
 	check("reject policy records ActionBusy diagnostic", #destroyDiag:findByName("ActionBusy") == 1)
-	test:expectMatch("busy diagnostic names the action",
-		destroyDiag:findByName("ActionBusy")[1].message, "Reserve is already running for this session")
+	test:expectMatch(
+		"busy diagnostic names the action",
+		destroyDiag:findByName("ActionBusy")[1].message,
+		"Reserve is already running for this session"
+	)
 
 	rejectSched.spawn(rejectThreads[1])
 	check("original call still completes after rejection", rejectResults[1] ~= nil and rejectResults[1].ok == true)
@@ -282,9 +322,10 @@ return function(test)
 
 	local described = Inventory:actionOptions("GrantItem")
 	check("actionOptions exposes async policy", described.async ~= nil and described.async.timeoutSeconds == 5)
-	check("sync actions have no async policy", Contracts.system("Plain")
-		:action("Noop", { input = Contracts.any() })
-		:actionOptions("Noop").async == nil)
+	check(
+		"sync actions have no async policy",
+		Contracts.system("Plain"):action("Noop", { input = Contracts.any() }):actionOptions("Noop").async == nil
+	)
 
 	local okBadConcurrency = pcall(function()
 		Contracts.system("Bad"):action("Nope", {
@@ -306,13 +347,12 @@ return function(test)
 	end)
 	check("invalid timeout is rejected at declaration", okBadTimeout == false)
 
-	local scopeSystem = Contracts.system("ScopeService")
-		:action("Watch", {
-			input = Contracts.any(),
-			async = {
-				timeoutSeconds = 1,
-			},
-		})
+	local scopeSystem = Contracts.system("ScopeService"):action("Watch", {
+		input = Contracts.any(),
+		async = {
+			timeoutSeconds = 1,
+		},
+	})
 	local scopeSched = ManualScheduler.new()
 	local scopeRuntime = Contracts.runtime(scopeSystem, {
 		scheduler = scopeSched,
@@ -344,17 +384,16 @@ return function(test)
 
 	local PlayerCancellation = require("../../src/Roblox/PlayerCancellation")
 
-	local cancelSystem = Contracts.system("CancelService")
-		:action("SaveLoadout", {
-			input = Contracts.object({
-				id = Contracts.stringId(),
-			}, { allowExtra = false }),
-			writes = { "PlayerData/Loadout" },
-			async = {
-				timeoutSeconds = false,
-				concurrency = "serialize",
-			},
-		})
+	local cancelSystem = Contracts.system("CancelService"):action("SaveLoadout", {
+		input = Contracts.object({
+			id = Contracts.stringId(),
+		}, { allowExtra = false }),
+		writes = { "PlayerData/Loadout" },
+		async = {
+			timeoutSeconds = false,
+			concurrency = "serialize",
+		},
+	})
 
 	local cancelSched = ManualScheduler.new()
 	local cancelDiag = Contracts.diagnostics()
@@ -389,27 +428,39 @@ return function(test)
 		end)
 	end
 
-	check("cancelActor with no gate is a no-op", (function()
-		local fresh = Contracts.runtime(cancelSystem, { scheduler = ManualScheduler.new() })
-		local summary = fresh:cancelActor(playerA, "player-left")
-		return summary.cancelledRuns == 0 and summary.purgedWaiters == 0
-	end)())
+	check(
+		"cancelActor with no gate is a no-op",
+		(function()
+			local fresh = Contracts.runtime(cancelSystem, { scheduler = ManualScheduler.new() })
+			local summary = fresh:cancelActor(playerA, "player-left")
+			return summary.cancelledRuns == 0 and summary.purgedWaiters == 0
+		end)()
+	)
 
 	-- In-flight cancellation: A's first call is mid-yield, second is queued (keyed by actor).
 	invokeFor(1, playerA, "alpha")
 	invokeFor(2, playerA, "beta")
 	invokeFor(3, playerB, "gamma")
-	check("setup: A in-flight, A queued, B in-flight", cancelThreads.alpha ~= nil and cancelThreads.beta == nil
-		and cancelThreads.gamma ~= nil)
+	check(
+		"setup: A in-flight, A queued, B in-flight",
+		cancelThreads.alpha ~= nil and cancelThreads.beta == nil and cancelThreads.gamma ~= nil
+	)
 
 	local summary = cancelRuntime:cancelActor(playerA, "player-left")
 	check("cancelActor reports one run and one waiter", summary.cancelledRuns == 1 and summary.purgedWaiters == 1)
-	check("in-flight run settles as ActionCancelled", cancelResults[1] ~= nil and cancelResults[1].ok == false
-		and cancelResults[1].name == "ActionCancelled")
-	check("queued waiter settles as ActionCancelled", cancelResults[2] ~= nil and cancelResults[2].ok == false
-		and cancelResults[2].name == "ActionCancelled")
-	test:expectMatch("queued waiter failure names the action and reason",
-		cancelResults[2].reason, "SaveLoadout cancelled while queued (player-left)")
+	check(
+		"in-flight run settles as ActionCancelled",
+		cancelResults[1] ~= nil and cancelResults[1].ok == false and cancelResults[1].name == "ActionCancelled"
+	)
+	check(
+		"queued waiter settles as ActionCancelled",
+		cancelResults[2] ~= nil and cancelResults[2].ok == false and cancelResults[2].name == "ActionCancelled"
+	)
+	test:expectMatch(
+		"queued waiter failure names the action and reason",
+		cancelResults[2].reason,
+		"SaveLoadout cancelled while queued (player-left)"
+	)
 	check("other actors are unaffected by cancelActor", cancelResults[3] == nil and cancelThreads.gamma ~= nil)
 
 	cancelSched.spawn(cancelThreads.alpha)
@@ -417,8 +468,10 @@ return function(test)
 	check("commit boundary records the cancellation", #cancelDiag:findByName("ActionCancelled") >= 1)
 
 	cancelSched.spawn(cancelThreads.gamma)
-	check("unrelated in-flight run still commits", cancelResults[3] ~= nil and cancelResults[3].ok == true
-		and cancelCommits[1] == "gamma")
+	check(
+		"unrelated in-flight run still commits",
+		cancelResults[3] ~= nil and cancelResults[3].ok == true and cancelCommits[1] == "gamma"
+	)
 
 	local repeatSummary = cancelRuntime:cancelActor(playerA, "player-left")
 	check("cancelActor after settle is a no-op", repeatSummary.cancelledRuns == 0 and repeatSummary.purgedWaiters == 0)
@@ -444,8 +497,10 @@ return function(test)
 	invokeFor(4, playerB, "delta")
 	check("setup: B back in flight", cancelThreads.delta ~= nil)
 	removingHandlers[1](playerB)
-	check("PlayerRemoving cancels that player's runs", cancelResults[4] ~= nil
-		and cancelResults[4].name == "ActionCancelled")
+	check(
+		"PlayerRemoving cancels that player's runs",
+		cancelResults[4] ~= nil and cancelResults[4].name == "ActionCancelled"
+	)
 
 	leaveHandle.destroy()
 	leaveHandle.destroy()
@@ -491,13 +546,17 @@ return function(test)
 	check("setup: zombie in flight, second queued", zombieThread ~= nil and secondRan == false)
 
 	zombieSched.advance(3)
-	check("timeout settles the caller with ActionTimeout", zombieResults[1] ~= nil
-		and zombieResults[1].name == "ActionTimeout")
+	check(
+		"timeout settles the caller with ActionTimeout",
+		zombieResults[1] ~= nil and zombieResults[1].name == "ActionTimeout"
+	)
 	check("serialize lock is held until the zombie finishes", secondRan == false and zombieResults[2] == nil)
 
 	zombieSched.spawn(zombieThread)
-	check("queued run starts after the zombie observes cancellation", secondRan == true
-		and zombieResults[2] ~= nil and zombieResults[2].ok == true)
+	check(
+		"queued run starts after the zombie observes cancellation",
+		secondRan == true and zombieResults[2] ~= nil and zombieResults[2].ok == true
+	)
 	check("late zombie result records a diagnostic", #zombieDiag:findByName("ActionLateResult") == 1)
 
 	test:section("cancelActor reentrancy")
@@ -527,8 +586,10 @@ return function(test)
 
 	holdLock("loadout")
 	holdLock("checkpoint")
-	check("setup: both locks held by the staying actor",
-		holderThreads.loadout ~= nil and holderThreads.checkpoint ~= nil)
+	check(
+		"setup: both locks held by the staying actor",
+		holderThreads.loadout ~= nil and holderThreads.checkpoint ~= nil
+	)
 
 	local leaverRuns = 0
 	local leaverResults = {}
@@ -551,15 +612,21 @@ return function(test)
 
 	queueLeaver(1, "loadout")
 	queueLeaver(2, "checkpoint")
-	check("setup: leaver queued behind both locks", leaverRuns == 0
-		and leaverResults[1] == nil and leaverResults[2] == nil)
+	check(
+		"setup: leaver queued behind both locks",
+		leaverRuns == 0 and leaverResults[1] == nil and leaverResults[2] == nil
+	)
 
 	local reentrantSummary = reentrantGate:cancelActor(leaver, "player-left")
 	check("purged continuations cannot start the actor's other queued runs", leaverRuns == 0)
 	check("cancelActor purges queued waiters on every lock", reentrantSummary.purgedWaiters == 2)
-	check("both queued calls settle as cancelled",
-		leaverResults[1] ~= nil and leaverResults[1].name == "ActionCancelled"
-			and leaverResults[2] ~= nil and leaverResults[2].name == "ActionCancelled")
+	check(
+		"both queued calls settle as cancelled",
+		leaverResults[1] ~= nil
+			and leaverResults[1].name == "ActionCancelled"
+			and leaverResults[2] ~= nil
+			and leaverResults[2].name == "ActionCancelled"
+	)
 
 	-- A snapshotted run can settle naturally while an earlier settle's
 	-- continuation unwinds; the summary must only count runs this call
@@ -609,17 +676,16 @@ return function(test)
 	test:section("Standalone RemoteGuard async binding")
 
 	local RemoteGuard = require("../../src/Roblox/RemoteGuard")
-	local standaloneSystem = Contracts.system("StandaloneService")
-		:action("Reserve", {
-			input = Contracts.object({}, { allowExtra = false }),
-			async = {
-				timeoutSeconds = 5,
-			},
-			remote = {
-				name = "ReserveRemote",
-				direction = "server",
-			},
-		})
+	local standaloneSystem = Contracts.system("StandaloneService"):action("Reserve", {
+		input = Contracts.object({}, { allowExtra = false }),
+		async = {
+			timeoutSeconds = 5,
+		},
+		remote = {
+			name = "ReserveRemote",
+			direction = "server",
+		},
+	})
 
 	local standaloneSched = ManualScheduler.new()
 	local standaloneDiag = Contracts.diagnostics()

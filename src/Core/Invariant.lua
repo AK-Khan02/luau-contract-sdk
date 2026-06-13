@@ -29,6 +29,12 @@ local function evaluateCondition(condition: any): (boolean, any?)
 	return resultOrReason == true, nil
 end
 
+local function resolveWarn(): any?
+	-- selene: allow(global_usage)
+	local globals: any = _G
+	return globals.warn
+end
+
 function Invariant.check(name: string, condition: any, details: any?, diagnostics: any?, context: any?): Result
 	local ok, errorReason = evaluateCondition(condition)
 	if ok then
@@ -63,8 +69,7 @@ end
 
 function Invariant.warn(name: string, condition: any, details: any?, diagnostics: any?, context: any?): boolean
 	local result = Invariant.check(name, condition, details, diagnostics, context)
-	local globals: any = _G
-	local warnFn: any = globals.warn
+	local warnFn: any = resolveWarn()
 	if not result.ok and type(warnFn) == "function" then
 		(warnFn :: (any) -> ())(result.message)
 	end

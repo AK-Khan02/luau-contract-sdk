@@ -1,142 +1,111 @@
 --!strict
 
 local AsyncGate = require("./AsyncGate")
+local ActionInvoker = require("./ActionInvoker")
 local Diagnostics = require("./Diagnostics")
-local RemoteGuard = require("../Roblox/RemoteGuard")
+local Names = require("./Names")
+local Result = require("./Result")
+local RuntimePipeline = require("./RuntimePipeline")
+local RuntimeRemoteBinding = require("./RuntimeRemoteBinding")
+local RuntimeRequest = require("./RuntimeRequest")
+local RuntimeTypes = require("./RuntimeTypes")
 local TaskScheduler = require("../Roblox/TaskScheduler")
 
-export type Request = {
-	actor: any?,
-	player: any?,
-	payload: any?,
-	input: any?,
-	context: any?,
-	diagnostics: any?,
-	session: any?,
-	sessionName: string?,
-	states: any?,
-	expectedRevision: any?,
-	revision: any?,
-	remote: string?,
-}
+export type DiagnosticsSink = RuntimeTypes.DiagnosticsSink
+export type Request = RuntimeTypes.Request
+export type SessionResolver = RuntimeTypes.SessionResolver
+export type SessionMap = RuntimeTypes.SessionMap
+export type ActionHandler = RuntimeTypes.ActionHandler
+export type TapHandlers = RuntimeTypes.TapHandlers
+export type Middleware = RuntimeTypes.Middleware
+export type UseOptions = RuntimeTypes.UseOptions
+export type Config = RuntimeTypes.Config
+type NormalizedRequest = RuntimeTypes.NormalizedRequest
+type PipelineInfo = RuntimeTypes.PipelineInfo
+type RuntimeData = RuntimeTypes.RuntimeData
 
-export type Config = {
-	diagnostics: any?,
-	sessions: any?,
-	lifecycleSessions: any?,
-	scheduler: any?,
-}
-
-local Runtime: any = {}
+local Runtime = {}
 Runtime.__index = Runtime
 
-local function assertName(kind: string, value: any)
-	if type(value) ~= "string" or value == "" then
-		error(kind .. " must be a non-empty string", 3)
+export type Runtime = typeof(setmetatable({} :: RuntimeData, Runtime))
+
+local assertName = Names.assertName
+local sortedKeys = require("./TableUtil").sortedStringKeys
+
+local function disconnect(connection: unknown)
+	local target = connection :: any
+	if target and type(target.Disconnect) == "function" then
+		local disconnectFn = target.Disconnect :: (any) -> ()
+		disconnectFn(target)
 	end
 end
 
-local function copyMap(value: any): any
-	local copy = {}
-	for key, child in pairs(value or {}) do
-		copy[key] = child
+local function systemName(systemContract: unknown): string
+	local target = systemContract :: any
+	if target ~= nil and type(target.name) == "function" then
+		local nameFn = target.name :: (any) -> string
+		return nameFn(target)
 	end
-	return copy
+	return "unknown"
 end
 
-local function sortedKeys(values: any): {string}
-	local keys = {}
-	for key in pairs(values or {}) do
-		if type(key) == "string" then
-			table.insert(keys, key)
-		end
-	end
-	table.sort(keys)
-	return keys
+local function isSystemContract(value: unknown): boolean
+	local target = value :: any
+	return target ~= nil
+		and type(target.name) == "function"
+		and type(target.describe) == "function"
+		and type(target.hasAction) == "function"
+		and type(target.runAction) == "function"
+		and type(target.remoteOptions) == "function"
+		and type(target.actionForRemote) == "function"
 end
 
-local function fieldPathValue(source: any, path: any): any
-	if type(path) ~= "string" or path == "" then
-		return nil
-	end
-
-	local value = source
-	for key in string.gmatch(path, "[^%.]+") do
-		if type(value) ~= "table" then
-			return nil
-		end
-		value = value[key]
-	end
-	return value
-end
-
-local function disconnect(connection: any)
-	if connection and type(connection.Disconnect) == "function" then
-		local target: any = connection
-		target:Disconnect()
-	end
-end
-
-local function record(diagnostics: any, fields: any): any
-	if diagnostics and diagnostics.record then
-		local target: any = diagnostics
-		return target:record(fields)
-	end
-	return fields
-end
-
-local function isSystemContract(value: any): boolean
-	return value ~= nil
-		and type(value.name) == "function"
-		and type(value.describe) == "function"
-		and type(value.hasAction) == "function"
-		and type(value.runAction) == "function"
-		and type(value.remoteOptions) == "function"
-		and type(value.actionForRemote) == "function"
-end
-
-function Runtime.new(systemContract: any, config: Config?): any
+function Runtime.new(systemContract: unknown, config: Config?): Runtime
 	if not isSystemContract(systemContract) then
 		error("Runtime.new expects a system contract", 2)
 	end
 
-	local options: any = config or {}
-	local runtime = setmetatable({
-		_system = systemContract,
-		_diagnostics = options.diagnostics or Diagnostics.new(),
-		_handlers = {},
-		_sessions = {},
-		_connections = {},
-		_boundRemotes = {},
-		_scheduler = options.scheduler,
-		_asyncGate = nil,
-		_taps = {},
-		_middleware = {},
-		_destroyed = false,
-	}, Runtime)
+	local options: Config = config or {}
+	local runtime = setmetatable(
+		{
+			_system = systemContract,
+			_diagnostics = options.diagnostics or Diagnostics.new(),
+			_handlers = {},
+			_sessions = {},
+			_connections = {},
+			_boundRemotes = {},
+			_scheduler = options.scheduler,
+			_asyncGate = nil,
+			_taps = {},
+			_middleware = {},
+			_destroyed = false,
+		} :: RuntimeData,
+		Runtime
+	)
 
-	for name, resolver in pairs(options.sessions or options.lifecycleSessions or {}) do
+	local configuredSessions: SessionMap = options.sessions or options.lifecycleSessions or {}
+	for name, resolver in pairs(configuredSessions) do
 		runtime:session(name, resolver)
 	end
 
 	return runtime
 end
 
-function Runtime._assertOpen(self: any)
+function Runtime._assertOpen(self: Runtime)
 	if self._destroyed then
 		error("Runtime has been destroyed", 3)
 	end
 end
 
-function Runtime.system(self: any): any
+function Runtime.system(self: Runtime): unknown
 	return self._system
 end
 
-function Runtime.diagnostics(self: any): any
+function Runtime.diagnostics(self: Runtime): DiagnosticsSink
 	return self._diagnostics
 end
 
-function Runtime._gate(self: any): any
+function Runtime._gate(self: Runtime): unknown
 	if self._asyncGate ~= nil then
 		return self._asyncGate
 	end
@@ -152,15 +121,11 @@ function Runtime._gate(self: any): any
 	return self._asyncGate
 end
 
-function Runtime._asyncPolicy(self: any, actionName: string): any
-	local actionOptions = self._system:actionOptions(actionName)
-	if actionOptions == nil then
-		return nil
-	end
-	return actionOptions.async
+function Runtime._asyncPolicy(self: Runtime, actionName: string): unknown
+	return ActionInvoker.asyncPolicy(self._system, actionName)
 end
 
-function Runtime.session(self: any, name: string, resolverOrSession: any): any
+function Runtime.session(self: Runtime, name: string, resolverOrSession: unknown): Runtime
 	self:_assertOpen()
 	assertName("Runtime session name", name)
 	if resolverOrSession == nil then
@@ -171,19 +136,24 @@ function Runtime.session(self: any, name: string, resolverOrSession: any): any
 	return self
 end
 
-function Runtime.implement(self: any, actionName: string, handler: (any, any?) -> any, options: any?): any
+function Runtime.implement(
+	self: Runtime,
+	actionName: string,
+	handler: ActionHandler,
+	options: { overwrite: boolean? }?
+): Runtime
 	self:_assertOpen()
 	assertName("Action name", actionName)
 	if type(handler) ~= "function" then
 		error("Runtime.implement expects an action handler function", 2)
 	end
-	local system: any = self._system
+	local system = self._system :: any
 	if not system:hasAction(actionName) then
 		error("Cannot implement unknown action: " .. actionName, 2)
 	end
-	local implementOptions: any = options or {}
-	local handlers: any = self._handlers
-	if handlers[actionName] ~= nil and not (implementOptions.overwrite == true) then
+	local handlers = self._handlers
+	local overwrite = options ~= nil and options.overwrite == true
+	if handlers[actionName] ~= nil and not overwrite then
 		error("Runtime action already implemented: " .. actionName, 2)
 	end
 
@@ -191,58 +161,20 @@ function Runtime.implement(self: any, actionName: string, handler: (any, any?) -
 	return self
 end
 
-function Runtime._context(self: any, request: any): any
-	local context = copyMap(request.context)
-	if request.remote ~= nil then
-		context.remote = context.remote or request.remote
-	end
-	return context
+function Runtime._normalizeRequest(self: Runtime, actionName: string, request: Request?): NormalizedRequest
+	return RuntimeRequest.normalize(actionName, request, self._diagnostics)
 end
 
-function Runtime._normalizeRequest(self: any, actionName: string, request: any?): any
-	local source: any = request or {}
-	local actor = source.actor
-	if actor == nil then
-		actor = source.player
-	end
-
-	local payload = source.payload
-	if payload == nil then
-		payload = source.input
-	end
-
-	local expectedRevision = source.expectedRevision
-	if expectedRevision == nil then
-		expectedRevision = source.revision
-	end
-	if type(expectedRevision) == "string" then
-		expectedRevision = fieldPathValue(payload, expectedRevision)
-	end
-
-	return {
-		action = actionName,
-		actor = actor,
-		payload = payload,
-		context = self:_context(source),
-		diagnostics = source.diagnostics or self._diagnostics,
-		session = source.session,
-		sessionName = source.sessionName,
-		states = source.states,
-		expectedRevision = expectedRevision,
-		remote = source.remote,
-	}
-end
-
-function Runtime._failure(self: any, name: string, message: string, request: any): any
+function Runtime._failure(self: Runtime, name: string, message: string, request: NormalizedRequest): unknown
 	local category = "runtime"
 	if string.sub(name, 1, 9) == "Lifecycle" then
 		category = "lifecycle"
 	end
 
-	record(request.diagnostics or self._diagnostics, {
+	return Result.failWithDiagnostic(request.diagnostics or self._diagnostics, {
 		level = "error",
 		category = category,
-		system = self._system:name(),
+		system = systemName(self._system),
 		name = name,
 		message = message,
 		context = {
@@ -250,17 +182,12 @@ function Runtime._failure(self: any, name: string, message: string, request: any
 			remote = request.remote,
 			session = request.sessionName,
 		},
-	})
-
-	return {
-		ok = false,
-		name = name,
-		reason = message,
+	}, {
 		context = request.context,
-	}
+	})
 end
 
-function Runtime._resolveSession(self: any, request: any): (any?, boolean, any?)
+function Runtime._resolveSession(self: Runtime, request: NormalizedRequest): (unknown?, boolean, unknown?)
 	if request.session ~= nil then
 		return request.session, true, nil
 	end
@@ -278,7 +205,7 @@ function Runtime._resolveSession(self: any, request: any): (any?, boolean, any?)
 		return resolver, true, nil
 	end
 
-	local resolveSession: any = resolver
+	local resolveSession = resolver :: SessionResolver
 	local ok, sessionOrReason = pcall(resolveSession, request)
 	if not ok then
 		return nil, false, self:_failure("LifecycleSessionError", tostring(sessionOrReason), request)
@@ -291,7 +218,7 @@ function Runtime._resolveSession(self: any, request: any): (any?, boolean, any?)
 	return sessionOrReason, true, nil
 end
 
-function Runtime.invoke(self: any, actionName: string, request: Request?): any
+function Runtime.invoke(self: Runtime, actionName: string, request: Request?): unknown
 	self:_assertOpen()
 	assertName("Action name", actionName)
 
@@ -299,7 +226,7 @@ function Runtime.invoke(self: any, actionName: string, request: Request?): any
 	if handler == nil then
 		error("Runtime action is not implemented: " .. actionName, 2)
 	end
-	local actionHandler: any = handler
+	local actionHandler = handler :: ActionHandler
 
 	local runtimeRequest = self:_normalizeRequest(actionName, request)
 	local session, ok, failure = self:_resolveSession(runtimeRequest)
@@ -307,62 +234,38 @@ function Runtime.invoke(self: any, actionName: string, request: Request?): any
 		return failure
 	end
 
-	local function execute(cancelToken: any): any
-		return self._system:runAction(actionName, {
-			actor = runtimeRequest.actor,
-			payload = runtimeRequest.payload,
-			context = runtimeRequest.context,
-			diagnostics = runtimeRequest.diagnostics,
-			session = session,
-			states = runtimeRequest.states,
-			expectedRevision = runtimeRequest.expectedRevision,
-			remote = runtimeRequest.remote,
-			cancelToken = cancelToken,
-		}, function(scope)
-			return actionHandler(scope, runtimeRequest)
-		end)
+	local asyncPolicy = self:_asyncPolicy(actionName)
+	local asyncGateResolver: (() -> unknown)? = nil
+	if asyncPolicy ~= nil then
+		asyncGateResolver = function(): unknown
+			return self:_gate()
+		end
 	end
 
-	local asyncPolicy = self:_asyncPolicy(actionName)
-	local info = {
+	return ActionInvoker.run({
+		system = self._system,
 		action = actionName,
 		actor = runtimeRequest.actor,
 		payload = runtimeRequest.payload,
+		context = runtimeRequest.context,
+		diagnostics = runtimeRequest.diagnostics,
+		session = session,
+		states = runtimeRequest.states,
+		expectedRevision = runtimeRequest.expectedRevision,
 		remote = runtimeRequest.remote,
 		validated = false,
-		diagnostics = runtimeRequest.diagnostics,
-	}
-
-	return self:_runPipeline(info, function(onStarted: any): any
-		if asyncPolicy == nil then
-			onStarted()
-			return execute(nil)
-		end
-
-		local gate = self:_gate()
-		local key = session
-		if key == nil then
-			key = runtimeRequest.actor
-		end
-		if key == nil then
-			key = actionName
-		end
-
-		return gate:run(key, {
-			concurrency = AsyncGate.normalizeConcurrency(asyncPolicy.concurrency, session ~= nil),
-			timeoutSeconds = AsyncGate.normalizeTimeout(asyncPolicy.timeoutSeconds),
-			system = self._system:name(),
-			action = actionName,
-			actor = runtimeRequest.actor,
-			remote = runtimeRequest.remote,
-			diagnostics = runtimeRequest.diagnostics,
-			onStarted = onStarted,
-		}, execute)
-	end)
+		handler = actionHandler,
+		handlerRequest = runtimeRequest,
+		asyncPolicy = asyncPolicy,
+		asyncGateResolver = asyncGateResolver,
+		pipeline = function(info: PipelineInfo, run: unknown): unknown
+			return self:_runPipeline(info, run)
+		end,
+	})
 end
 
-function Runtime._pipelineClock(self: any): () -> number
-	local scheduler: any = self._scheduler
+function Runtime._pipelineClock(self: Runtime): () -> number
+	local scheduler = self._scheduler
 	if scheduler ~= nil and type(scheduler.clock) == "function" then
 		return scheduler.clock :: () -> number
 	end
@@ -374,7 +277,7 @@ function Runtime._pipelineClock(self: any): () -> number
 	end
 end
 
-function Runtime.onAction(self: any, handlers: any): () -> ()
+function Runtime.onAction(self: Runtime, handlers: TapHandlers): () -> ()
 	self:_assertOpen()
 	if type(handlers) ~= "table" then
 		error("Runtime.onAction expects a table of handlers", 2)
@@ -400,9 +303,9 @@ function Runtime.onAction(self: any, handlers: any): () -> ()
 	end
 end
 
-function Runtime._emitTap(self: any, phase: string, event: any)
+function Runtime._emitTap(self: Runtime, phase: string, event: unknown)
 	for token, tap in pairs(self._taps) do
-		local listener = tap[phase]
+		local listener = (tap :: any)[phase]
 		if listener ~= nil then
 			local ok = pcall(listener, event)
 			if not ok then
@@ -412,13 +315,13 @@ function Runtime._emitTap(self: any, phase: string, event: any)
 	end
 end
 
-function Runtime.use(self: any, middlewareFn: any, options: any?): () -> ()
+function Runtime.use(self: Runtime, middlewareFn: Middleware, options: UseOptions?): () -> ()
 	self:_assertOpen()
 	if type(middlewareFn) ~= "function" then
 		error("Runtime.use expects a middleware function", 2)
 	end
 
-	local useOptions: any = options or {}
+	local useOptions: UseOptions = options or {}
 	local actions = nil
 	if useOptions.actions ~= nil then
 		if type(useOptions.actions) ~= "table" then
@@ -449,11 +352,11 @@ function Runtime.use(self: any, middlewareFn: any, options: any?): () -> ()
 	end
 end
 
-function Runtime._middlewareFailure(self: any, info: any, name: string, message: string): any
-	record(info.diagnostics or self._diagnostics, {
+function Runtime._middlewareFailure(self: Runtime, info: PipelineInfo, name: string, message: string): unknown
+	return Result.failWithDiagnostic(info.diagnostics or self._diagnostics, {
 		level = "error",
 		category = "runtime",
-		system = self._system:name(),
+		system = systemName(self._system),
 		name = name,
 		message = message,
 		context = {
@@ -461,118 +364,13 @@ function Runtime._middlewareFailure(self: any, info: any, name: string, message:
 			remote = info.remote,
 		},
 	})
-
-	return {
-		ok = false,
-		name = name,
-		reason = message,
-	}
 end
 
-function Runtime._runPipeline(self: any, info: any, run: any): any
-	-- Snapshot the matching wrap chain at invocation start: use()/remove during
-	-- an in-flight invocation must only affect later invocations.
-	local chain: {any} = {}
-	for _, entry in ipairs(self._middleware) do
-		if entry.actions == nil or entry.actions[info.action] == true then
-			table.insert(chain, entry.fn)
-		end
-	end
-
-	local hasTaps = next(self._taps) ~= nil
-	local clock = self:_pipelineClock()
-	local queuedAt = clock()
-	local startedAt = nil
-
-	local function onStarted()
-		startedAt = clock()
-		if hasTaps then
-			self:_emitTap("started", {
-				action = info.action,
-				actor = info.actor,
-				remote = info.remote,
-				queuedAt = queuedAt,
-				startedAt = startedAt,
-			})
-		end
-	end
-
-	local validResults: any = setmetatable({}, { __mode = "k" })
-	local function accept(result: any): any
-		if type(result) == "table" then
-			validResults[result] = true
-		end
-		return result
-	end
-
-	local ranAction = false
-	local ctx: any = {
-		action = info.action,
-		actor = info.actor,
-		payload = info.payload,
-		remote = info.remote,
-		validated = info.validated == true,
-		locals = {},
-	}
-	function ctx.fail(_, name: any, reason: any): any
-		if ranAction then
-			error("ctx:fail cannot be called after next()", 2)
-		end
-		local failName = type(name) == "string" and name or "ActionRejected"
-		local message = reason ~= nil and tostring(reason) or (failName .. " from middleware")
-		return accept(self:_middlewareFailure(info, failName, message))
-	end
-
-	local function invokeChain(index: number): any
-		if index > #chain then
-			ranAction = true
-			return accept(run(onStarted))
-		end
-
-		local middlewareFn = chain[index]
-		local nextCalled = false
-		local function nextFn(): any
-			if nextCalled then
-				error("next() already called", 2)
-			end
-			nextCalled = true
-			return invokeChain(index + 1)
-		end
-
-		local ok, value = pcall(middlewareFn, ctx, nextFn)
-		if not ok then
-			return accept(self:_middlewareFailure(info, "ActionMiddlewareError", tostring(value)))
-		end
-		if type(value) == "table" and validResults[value] == true then
-			return value
-		end
-		return accept(self:_middlewareFailure(
-			info,
-			"ActionMiddlewareInvalidResult",
-			"middleware must return next() result or ctx:fail() result"
-		))
-	end
-
-	local result = invokeChain(1)
-
-	if hasTaps then
-		self:_emitTap("settled", {
-			action = info.action,
-			actor = info.actor,
-			remote = info.remote,
-			queuedAt = queuedAt,
-			startedAt = startedAt,
-			settledAt = clock(),
-			ok = type(result) == "table" and result.ok == true,
-			outcome = type(result) == "table" and result.name or nil,
-			result = result,
-		})
-	end
-
-	return result
+function Runtime._runPipeline(self: Runtime, info: PipelineInfo, run: unknown): unknown
+	return RuntimePipeline.run(self, info, run)
 end
 
-function Runtime.cancelActor(self: any, actor: any, reason: any?): any
+function Runtime.cancelActor(self: Runtime, actor: unknown, reason: unknown?): unknown
 	if self._asyncGate == nil then
 		return {
 			cancelledRuns = 0,
@@ -580,143 +378,21 @@ function Runtime.cancelActor(self: any, actor: any, reason: any?): any
 		}
 	end
 
-	local gate: any = self._asyncGate
+	local gate = self._asyncGate :: any
 	return gate:cancelActor(actor, reason)
 end
 
-function Runtime._remoteRequest(self: any, remoteName: string, bindOptions: any, player: any, payload: any): any
-	local actionName = self._system:actionForRemote(remoteName) or remoteName
-	return self:_normalizeRequest(actionName, {
-		actor = player,
-		payload = payload,
-		context = bindOptions.context,
-		diagnostics = bindOptions.diagnostics or self._diagnostics,
-		remote = remoteName,
-	})
+function Runtime.bindRemote(self: Runtime, remoteName: string, remoteObject: unknown, options: unknown?): unknown
+	return RuntimeRemoteBinding.bind(self, remoteName, remoteObject, options)
 end
 
-function Runtime._remoteSessions(self: any, bindOptions: any): any
-	local runtime = self
-	local localSessions: any = bindOptions.sessions or bindOptions.lifecycleSessions or {}
-	local sessions: any = {}
-
-	return setmetatable(sessions, {
-		__index = function(_, sessionName: any): any
-			if localSessions[sessionName] == nil and runtime._sessions[sessionName] == nil then
-				return nil
-			end
-
-			return function(player: any, payload: any, remoteName: string): any
-				local request = runtime:_remoteRequest(remoteName, bindOptions, player, payload)
-				request.sessionName = sessionName
-
-				local resolver = localSessions[sessionName] or runtime._sessions[sessionName]
-				if type(resolver) == "function" then
-					local resolveSession: any = resolver
-					local session = resolveSession(request)
-					if session == nil then
-						error("lifecycle session resolver returned nil: " .. tostring(sessionName))
-					end
-					return session
-				end
-				return resolver
-			end
-		end,
-	})
-end
-
-function Runtime._remoteRevision(self: any, bindOptions: any): any
-	local revision = bindOptions.expectedRevision or bindOptions.revision
-	if type(revision) ~= "function" then
-		return revision
-	end
-
-	local runtime = self
-	local revisionResolver: any = revision
-	return function(player: any, payload: any, remoteName: string): any
-		return revisionResolver(runtime:_remoteRequest(remoteName, bindOptions, player, payload))
-	end
-end
-
-function Runtime._remoteHandler(self: any, remoteName: string, bindOptions: any): any
-	local remoteOptions = self._system:remoteOptions(remoteName)
-	if remoteOptions == nil then
-		error("Cannot bind unknown remote: " .. remoteName, 3)
-	end
-
-	local actionName = remoteOptions.action
-	if actionName ~= nil then
-		local handler = self._handlers[actionName]
-		if handler == nil then
-			error("Cannot bind remote without implementation for action: " .. actionName, 3)
-		end
-		local actionHandler: any = handler
-
-		return function(player: any, payload: any, scope: any): any
-			local request = self:_remoteRequest(remoteName, bindOptions, player, payload)
-			return actionHandler(scope, request)
-		end
-	end
-
-	if type(bindOptions.handler) ~= "function" then
-		error("Runtime.bindRemote needs options.handler for remotes without an action", 3)
-	end
-	return bindOptions.handler
-end
-
-function Runtime._remoteGuardOptions(self: any, bindOptions: any): any
-	local options = copyMap(bindOptions)
-	options.handler = nil
-	options.diagnostics = bindOptions.diagnostics or self._diagnostics
-	options.sessions = self:_remoteSessions(bindOptions)
-	options.expectedRevision = self:_remoteRevision(bindOptions)
-	options.revision = nil
-
-	return options
-end
-
-function Runtime.bindRemote(self: any, remoteName: string, remoteObject: any, options: any?): any
-	self:_assertOpen()
-	assertName("Remote name", remoteName)
-	if remoteObject == nil then
-		error("Runtime.bindRemote expects a remote object", 2)
-	end
-
-	local bindOptions = options or {}
-	if self._connections[remoteName] ~= nil then
-		if bindOptions.overwrite ~= true then
-			error("Runtime remote already bound: " .. remoteName, 2)
-		end
-		disconnect(self._connections[remoteName])
-	end
-
-	local handler = self:_remoteHandler(remoteName, bindOptions)
-	local guardOptions: any = self:_remoteGuardOptions(bindOptions)
-
-	local remoteOptions: any = self._system:remoteOptions(remoteName)
-	local remoteAction: any = remoteOptions and remoteOptions.action
-	if remoteAction ~= nil and self:_asyncPolicy(remoteAction) ~= nil then
-		guardOptions.asyncGate = self:_gate()
-	end
-	guardOptions.pipeline = function(info: any, run: any): any
-		return self:_runPipeline(info, run)
-	end
-
-	local guardHandler: any = handler
-	local connection = RemoteGuard.connect(self._system, remoteName, remoteObject, guardHandler, guardOptions)
-
-	self._connections[remoteName] = connection
-	self._boundRemotes[remoteName] = true
-	return connection
-end
-
-function Runtime.bindRemotes(self: any, remoteMap: any, options: any?): any
+function Runtime.bindRemotes(self: Runtime, remoteMap: unknown, options: unknown?): Runtime
 	self:_assertOpen()
 	if type(remoteMap) ~= "table" then
 		error("Runtime.bindRemotes expects a map of remotes", 2)
 	end
 
-	for remoteName, remoteObject in pairs(remoteMap) do
+	for remoteName, remoteObject in pairs(remoteMap :: { [unknown]: unknown }) do
 		if type(remoteName) == "string" then
 			self:bindRemote(remoteName, remoteObject, options)
 		end
@@ -724,9 +400,11 @@ function Runtime.bindRemotes(self: any, remoteMap: any, options: any?): any
 	return self
 end
 
-function Runtime.describe(self: any): any
+function Runtime.describe(self: Runtime): unknown
+	local system = self._system :: any
+	local describeFn = system.describe :: (any) -> unknown
 	return {
-		system = self._system:describe(),
+		system = describeFn(system),
 		implementedActions = sortedKeys(self._handlers),
 		boundRemotes = sortedKeys(self._boundRemotes),
 		sessions = sortedKeys(self._sessions),
@@ -734,7 +412,7 @@ function Runtime.describe(self: any): any
 	}
 end
 
-function Runtime.destroy(self: any): any
+function Runtime.destroy(self: Runtime): Runtime
 	if self._destroyed then
 		return self
 	end
@@ -744,7 +422,7 @@ function Runtime.destroy(self: any): any
 	end
 
 	if self._asyncGate ~= nil then
-		local gate: any = self._asyncGate
+		local gate = self._asyncGate :: any
 		gate:destroy()
 		self._asyncGate = nil
 	end

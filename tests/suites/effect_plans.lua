@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 
@@ -113,9 +113,18 @@ return function(test)
 	end)
 
 	check("staged action commits after postconditions", success.ok == true and inventory.Rifle == true)
-	check("staged action reports committed effect", success.effects[1].status == "committed" and success.commit.committed == 1)
-	check("staged action reports hide functions", containsFunction(success.effects) == false and containsFunction(success.commit) == false)
-	check("staged action report sanitizes metadata and results", success.effects[1].metadata.audit.kind == "function" and success.effects[1].result.undo.kind == "function")
+	check(
+		"staged action reports committed effect",
+		success.effects[1].status == "committed" and success.commit.committed == 1
+	)
+	check(
+		"staged action reports hide functions",
+		containsFunction(success.effects) == false and containsFunction(success.commit) == false
+	)
+	check(
+		"staged action report sanitizes metadata and results",
+		success.effects[1].metadata.audit.kind == "function" and success.effects[1].result.undo.kind == "function"
+	)
 
 	local invalidOutputRan = false
 	local invalidOutput = Inventory:runAction("BadOutputGrant", {
@@ -137,7 +146,10 @@ return function(test)
 		}
 	end)
 
-	check("invalid output prevents staged commit", invalidOutput.ok == false and invalidOutputRan == false and inventory.Bow ~= true)
+	check(
+		"invalid output prevents staged commit",
+		invalidOutput.ok == false and invalidOutputRan == false and inventory.Bow ~= true
+	)
 	check("invalid output keeps staged effect planned", invalidOutput.effects[1].status == "planned")
 
 	local rejectedCommitRan = false
@@ -160,7 +172,10 @@ return function(test)
 		}
 	end)
 
-	check("postcondition failure prevents staged commit", rejected.ok == false and rejectedCommitRan == false and inventory.Potion ~= true)
+	check(
+		"postcondition failure prevents staged commit",
+		rejected.ok == false and rejectedCommitRan == false and inventory.Potion ~= true
+	)
 
 	local rollbackLog = {}
 	local commitDiagnostics = Contracts.diagnostics()
@@ -204,12 +219,17 @@ return function(test)
 	end)
 
 	check("commit failure fails action", failedCommit.ok == false and failedCommit.name == "ActionCommitFailed")
-	check("commit failure rolls back prior committed effects", inventory.Axe ~= true and rollbackLog[2] == "commit Shield" and rollbackLog[3] == "rollback Axe")
+	check(
+		"commit failure rolls back prior committed effects",
+		inventory.Axe ~= true and rollbackLog[2] == "commit Shield" and rollbackLog[3] == "rollback Axe"
+	)
 	check("commit failure records diagnostic", commitDiagnostics:last().name == "ActionCommitFailed")
-	check("commit failure reports statuses", failedCommit.effects[1].status == "rolledBack" and failedCommit.effects[2].status == "failed")
+	check(
+		"commit failure reports statuses",
+		failedCommit.effects[1].status == "rolledBack" and failedCommit.effects[2].status == "failed"
+	)
 
-	local BrokenLifecycle = Contracts.lifecycle("Match")
-		:transition("Running", "RoundEnded", "Results")
+	local BrokenLifecycle = Contracts.lifecycle("Match"):transition("Running", "RoundEnded", "Results")
 
 	local lifecycleInventory = {}
 	local Match = Contracts.system("TransactionalMatch")
@@ -252,7 +272,10 @@ return function(test)
 		}
 	end)
 
-	check("lifecycle transition failure prevents staged commit", lifecycleFailure.ok == false and lifecycleCommitRan == false and lifecycleInventory.Gem ~= true)
+	check(
+		"lifecycle transition failure prevents staged commit",
+		lifecycleFailure.ok == false and lifecycleCommitRan == false and lifecycleInventory.Gem ~= true
+	)
 	check("lifecycle transition failure leaves staged effect planned", lifecycleFailure.effects[1].status == "planned")
 
 	local StaleLifecycle = Contracts.lifecycle("Match")
@@ -318,17 +341,25 @@ return function(test)
 		}
 	end)
 
-	check("stale lifecycle apply rolls back committed staged effects", staleResult.ok == false and staleResult.name == "LifecycleStaleRevision" and staleInventory.Coin ~= true)
-	check("stale lifecycle rollback runs in result", staleRollbackLog[1] == "commit" and staleRollbackLog[2] == "rollback")
-	check("stale lifecycle reports rolled back effect", staleResult.effects[1].status == "rolledBack" and staleResult.rollback.rolledBack == 1)
+	check(
+		"stale lifecycle apply rolls back committed staged effects",
+		staleResult.ok == false and staleResult.name == "LifecycleStaleRevision" and staleInventory.Coin ~= true
+	)
+	check(
+		"stale lifecycle rollback runs in result",
+		staleRollbackLog[1] == "commit" and staleRollbackLog[2] == "rollback"
+	)
+	check(
+		"stale lifecycle reports rolled back effect",
+		staleResult.effects[1].status == "rolledBack" and staleResult.rollback.rolledBack == 1
+	)
 
 	test:section("Eager effects bypass rollback")
 
 	-- scope:write runs its writer immediately, so a post-commit failure cannot
 	-- undo it: only staged effects are transactional. The gap must be surfaced
 	-- loudly rather than leaving state silently mutated under a failed action.
-	local EagerLifecycle = Contracts.lifecycle("Match")
-		:transition("Lobby", "RoundStarted", "Running")
+	local EagerLifecycle = Contracts.lifecycle("Match"):transition("Lobby", "RoundStarted", "Running")
 
 	local EagerMatch = Contracts.system("EagerRollbackMatch")
 		:strictPermissions()
@@ -377,16 +408,23 @@ return function(test)
 		return { granted = true, itemId = "Coin" }
 	end)
 
-	check("post-commit stale revision fails the action",
-		eagerResult.ok == false and eagerResult.name == "LifecycleStaleRevision")
+	check(
+		"post-commit stale revision fails the action",
+		eagerResult.ok == false and eagerResult.name == "LifecycleStaleRevision"
+	)
 	check("staged effect is rolled back", eagerStagedCommitRan == true and eagerInventory.StagedCoin == nil)
 	check("eager write is not rolled back (the gap)", eagerInventory.EagerCoin == "applied")
-	check("eager rollback gap is surfaced as a diagnostic",
-		#eagerDiag:findByName("ActionEagerEffectsNotRolledBack") == 1)
+	check(
+		"eager rollback gap is surfaced as a diagnostic",
+		#eagerDiag:findByName("ActionEagerEffectsNotRolledBack") == 1
+	)
 	local eagerWarn = eagerDiag:findByName("ActionEagerEffectsNotRolledBack")[1]
-	check("eager warning enumerates the non-transactional mutation",
-		eagerWarn ~= nil and eagerWarn.context.effects[1].kind == "write"
-			and eagerWarn.context.effects[1].target == "Match.Rewards")
+	check(
+		"eager warning enumerates the non-transactional mutation",
+		eagerWarn ~= nil
+			and eagerWarn.context.effects[1].kind == "write"
+			and eagerWarn.context.effects[1].target == "Match.Rewards"
+	)
 	check("eager warning is a warning, not an error", eagerWarn ~= nil and eagerWarn.level == "warn")
 
 	test:section("EffectPlan failure paths")
@@ -412,15 +450,24 @@ return function(test)
 
 	local manyDiagnostics = Contracts.diagnostics()
 	local manyResult = manyPlan:commit({}, manyDiagnostics)
-	check("fifth commit failure reports four commits", manyResult.ok == false
-		and manyResult.name == "ActionCommitFailed" and manyResult.committed == 4)
+	check(
+		"fifth commit failure reports four commits",
+		manyResult.ok == false and manyResult.name == "ActionCommitFailed" and manyResult.committed == 4
+	)
 	test:expectMatch("commit failure carries the thrown error", manyResult.reason, "commit five exploded")
 	check("all four prior effects roll back", manyResult.rollback.rolledBack == 4 and manyResult.rollback.ok == true)
-	check("rollbacks run in reverse order", orderedLog[5] == "rollback E4" and orderedLog[6] == "rollback E3"
-		and orderedLog[7] == "rollback E2" and orderedLog[8] == "rollback E1")
+	check(
+		"rollbacks run in reverse order",
+		orderedLog[5] == "rollback E4"
+			and orderedLog[6] == "rollback E3"
+			and orderedLog[7] == "rollback E2"
+			and orderedLog[8] == "rollback E1"
+	)
 	check("failed effect keeps failed status", manyResult.effects[5].status == "failed")
-	check("rolled back effects report their status", manyResult.effects[1].status == "rolledBack"
-		and manyResult.effects[4].status == "rolledBack")
+	check(
+		"rolled back effects report their status",
+		manyResult.effects[1].status == "rolledBack" and manyResult.effects[4].status == "rolledBack"
+	)
 
 	local brokenRollbackPlan = EffectPlan.new()
 	brokenRollbackPlan:stage("write", "Data/Fragile", {
@@ -437,12 +484,22 @@ return function(test)
 
 	local brokenDiagnostics = Contracts.diagnostics()
 	local brokenResult = brokenRollbackPlan:commit({}, brokenDiagnostics)
-	check("rollback failure surfaces in the commit result", brokenResult.ok == false
-		and brokenResult.rollback.ok == false and brokenResult.rollback.name == "EffectPlanRollbackFailed")
+	check(
+		"rollback failure surfaces in the commit result",
+		brokenResult.ok == false
+			and brokenResult.rollback.ok == false
+			and brokenResult.rollback.name == "EffectPlanRollbackFailed"
+	)
 	check("rollback failure names the failing effect", brokenResult.rollback.failures[1].name == "ActionRollbackFailed")
-	test:expectMatch("rollback failure carries the thrown error",
-		brokenResult.rollback.failures[1].reason, "rollback exploded")
-	check("rollback failure marks the effect status", brokenResult.rollback.failures[1].effect.status == "rollbackFailed")
+	test:expectMatch(
+		"rollback failure carries the thrown error",
+		brokenResult.rollback.failures[1].reason,
+		"rollback exploded"
+	)
+	check(
+		"rollback failure marks the effect status",
+		brokenResult.rollback.failures[1].effect.status == "rollbackFailed"
+	)
 	check("rollback failure records a diagnostic", #brokenDiagnostics:findByName("ActionRollbackFailed") == 1)
 
 	local noRollbackPlan = EffectPlan.new()
@@ -455,10 +512,17 @@ return function(test)
 
 	local noRollbackDiagnostics = Contracts.diagnostics()
 	local noRollbackResult = noRollbackPlan:commit({}, noRollbackDiagnostics)
-	check("missing rollback is reported as unavailable",
-		noRollbackResult.rollback.failures[1].name == "ActionRollbackUnavailable")
-	test:expectMatch("unavailable rollback names the target",
-		noRollbackResult.rollback.failures[1].reason, "effect rollback unavailable for Data/OneWay")
-	check("unavailable rollback records a diagnostic",
-		#noRollbackDiagnostics:findByName("ActionRollbackUnavailable") == 1)
+	check(
+		"missing rollback is reported as unavailable",
+		noRollbackResult.rollback.failures[1].name == "ActionRollbackUnavailable"
+	)
+	test:expectMatch(
+		"unavailable rollback names the target",
+		noRollbackResult.rollback.failures[1].reason,
+		"effect rollback unavailable for Data/OneWay"
+	)
+	check(
+		"unavailable rollback records a diagnostic",
+		#noRollbackDiagnostics:findByName("ActionRollbackUnavailable") == 1
+	)
 end

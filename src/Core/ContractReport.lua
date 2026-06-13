@@ -2,28 +2,12 @@
 
 local RemotePolicy = require("./RemotePolicy")
 local Schema = require("./Schema")
+local TableUtil = require("./TableUtil")
 
 local ContractReport = {}
 
-local function copyList(values: {any}?): {any}
-	local copy = {}
-	for index, value in ipairs(values or {}) do
-		copy[index] = value
-	end
-	return copy
-end
-
-local function copyMap(values: any): any
-	if type(values) ~= "table" then
-		return values
-	end
-
-	local copy = {}
-	for key, value in pairs(values) do
-		copy[key] = value
-	end
-	return copy
-end
+local copyList = TableUtil.copyList
+local copyMap = TableUtil.copyMap
 
 local function describeValue(value: any): any
 	if type(value) == "function" then
@@ -42,7 +26,7 @@ local function describeValue(value: any): any
 	return copy
 end
 
-local function namedChecks(references: any, fallback: {any}?): {string}
+local function namedChecks(references: any, fallback: { any }?): { string }
 	local names = {}
 	if references == "all" then
 		for _, check in ipairs(fallback or {}) do
@@ -91,7 +75,7 @@ local function describePolicy(policy: any): any
 	return describeValue(policy or {})
 end
 
-local function describeAction(action: any, preconditionFallback: {any}, postconditionFallback: {any}): any
+local function describeAction(action: any, preconditionFallback: { any }, postconditionFallback: { any }): any
 	return {
 		name = action.name,
 		input = schemaDescription(action.input),
@@ -121,7 +105,7 @@ local function describeLifecycle(lifecycle: any): any
 	return describeValue(lifecycle)
 end
 
-local function checkNames(checks: {any}): {string}
+local function checkNames(checks: { any }): { string }
 	local names = {}
 	for _, check in ipairs(checks) do
 		table.insert(names, check.name)
@@ -129,7 +113,7 @@ local function checkNames(checks: {any}): {string}
 	return names
 end
 
-local function actorPolicyNames(actorPolicies: any): {string}
+local function actorPolicyNames(actorPolicies: any): { string }
 	local names = {}
 	for name in pairs(actorPolicies or {}) do
 		if type(name) == "string" then

@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 local PackageRoot = require("../../src")
@@ -22,6 +22,31 @@ return function(test)
 	check("package root exports lifecycle sessions", PackageRoot.LifecycleSession == Contracts.LifecycleSession)
 	check("package root exports runtime", PackageRoot.Runtime == Contracts.Runtime)
 	check("package root exports host tools", PackageRoot.Host.ScanRunner ~= nil)
+	check(
+		"package classifies stable public api",
+		PackageRoot.Public.system == PackageRoot.system
+			and PackageRoot.Public.Runtime == PackageRoot.Runtime
+			and PackageRoot.publicApi.status.stable == "stable"
+	)
+	check(
+		"package classifies experimental and internal exports without removing aliases",
+		PackageRoot.Experimental.Roblox == PackageRoot.Roblox
+			and PackageRoot.Internal.AsyncGate == PackageRoot.AsyncGate
+			and PackageRoot.publicApi.experimental[1] == "EffectPlan"
+	)
+	local publicMutationOk = pcall(function()
+		PackageRoot.Public.system = nil
+	end)
+	local stableListMutationOk = pcall(function()
+		PackageRoot.publicApi.stable[1] = "mutated"
+	end)
+	check(
+		"package api classifications are read-only",
+		publicMutationOk == false
+			and stableListMutationOk == false
+			and PackageRoot.Public.system == PackageRoot.system
+			and PackageRoot.publicApi.stable[1] == "Public"
+	)
 
 	test:section("Schema")
 
@@ -40,9 +65,15 @@ return function(test)
 		allowExtra = false,
 	})
 
-	check("object accepts optional field", Contracts.validate(deploySchema, { Mode = "solo", NewRun = true }).ok == true)
+	check(
+		"object accepts optional field",
+		Contracts.validate(deploySchema, { Mode = "solo", NewRun = true }).ok == true
+	)
 	check("object rejects missing required field", Contracts.validate(deploySchema, { NewRun = true }).ok == false)
-	check("object rejects extra field by default", Contracts.validate(deploySchema, { Mode = "solo", Admin = true }).ok == false)
+	check(
+		"object rejects extra field by default",
+		Contracts.validate(deploySchema, { Mode = "solo", Admin = true }).ok == false
+	)
 	check("vector3 accepts table vector", Contracts.validate(Contracts.vector3(), { X = 0, Y = 1, Z = 0 }).ok == true)
 	check(
 		"unitish vector rejects large direction",

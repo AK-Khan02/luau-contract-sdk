@@ -1,15 +1,34 @@
---!nocheck
+--!strict
+
+export type Harness = {
+	passed: number,
+	failed: number,
+	erroredSuites: number,
+	check: (Harness, string, any, string?) -> (),
+	expect: (Harness, string, any, any) -> (),
+	expectMatch: (Harness, string, any, string) -> (),
+	expectError: (Harness, string, string, any, ...any) -> (),
+	suite: (Harness, string) -> (),
+	section: (Harness, string) -> (),
+	suiteError: (Harness, string, any) -> (),
+	summary: (Harness) -> (),
+}
 
 local TestHarness = {}
 
-local function formatValue(value)
-	if type(value) == "string" then
-		return string.format("%q", value)
+local function formatScalar(value: any): string
+	local valueType = type(value)
+	if valueType == "string" then
+		return string.format("%q", value) .. " (string)"
 	end
+	return tostring(value) .. " (" .. valueType .. ")"
+end
+
+local function formatValue(value: any): string
 	if type(value) == "table" then
-		local parts = {}
+		local parts: { string } = {}
 		for key, child in pairs(value) do
-			table.insert(parts, tostring(key) .. "=" .. tostring(child))
+			table.insert(parts, tostring(key) .. "=" .. formatScalar(child))
 			if #parts >= 6 then
 				table.insert(parts, "...")
 				break
@@ -17,101 +36,101 @@ local function formatValue(value)
 		end
 		return "{" .. table.concat(parts, ", ") .. "}"
 	end
-	return tostring(value)
+	return formatScalar(value)
 end
 
-function TestHarness.new()
-	local self = {
+function TestHarness.new(): Harness
+	local suiteName: string? = nil
+	local sectionName: string? = nil
+	local harness: any = {
 		passed = 0,
 		failed = 0,
 		erroredSuites = 0,
-		_suite = nil,
-		_section = nil,
 	}
 
-	function self:_location()
-		local parts = {}
-		if self._suite ~= nil then
-			table.insert(parts, self._suite)
+	local function location(): string
+		local parts: { string } = {}
+		if suiteName ~= nil then
+			table.insert(parts, suiteName)
 		end
-		if self._section ~= nil then
-			table.insert(parts, self._section)
+		if sectionName ~= nil then
+			table.insert(parts, sectionName)
 		end
 		return table.concat(parts, " > ")
 	end
 
-	function self:_fail(name, details)
-		self.failed += 1
-		local location = self:_location()
-		local line = "  FAIL: " .. (location ~= "" and location .. " > " or "") .. name
+	local function fail(name: string, details: string?)
+		harness.failed += 1
+		local currentLocation = location()
+		local line = "  FAIL: " .. (currentLocation ~= "" and currentLocation .. " > " or "") .. name
 		if details ~= nil then
 			line ..= "\n        " .. details
 		end
 		print(line)
 	end
 
-	function self:check(name, condition, details)
+	harness.check = function(_: Harness, name: string, condition: any, details: string?)
 		if condition then
-			self.passed += 1
+			harness.passed += 1
 		else
-			self:_fail(name, details)
+			fail(name, details)
 		end
 	end
 
-	function self:expect(name, got, want)
+	harness.expect = function(_: Harness, name: string, got: any, want: any)
 		if got == want then
-			self.passed += 1
+			harness.passed += 1
 		else
-			self:_fail(name, "expected " .. formatValue(want) .. ", got " .. formatValue(got))
+			fail(name, "expected " .. formatValue(want) .. ", got " .. formatValue(got))
 		end
 	end
 
-	function self:expectMatch(name, text, fragment)
+	harness.expectMatch = function(_: Harness, name: string, text: any, fragment: string)
 		if type(text) == "string" and string.find(text, fragment, 1, true) ~= nil then
-			self.passed += 1
+			harness.passed += 1
 		else
-			self:_fail(name, "expected text containing " .. formatValue(fragment) .. ", got " .. formatValue(text))
+			fail(name, "expected text containing " .. formatValue(fragment) .. ", got " .. formatValue(text))
 		end
 	end
 
-	function self:expectError(name, fragment, fn, ...)
+	harness.expectError = function(_: Harness, name: string, fragment: string, fn: any, ...: any)
 		local ok, err = pcall(fn, ...)
 		if ok then
-			self:_fail(name, "expected an error containing " .. formatValue(fragment) .. ", but the call succeeded")
+			fail(name, "expected an error containing " .. formatValue(fragment) .. ", but the call succeeded")
 			return
 		end
 		local message = tostring(err)
 		if string.find(message, fragment, 1, true) ~= nil then
-			self.passed += 1
+			harness.passed += 1
 		else
-			self:_fail(name, "expected error containing " .. formatValue(fragment) .. ", got " .. formatValue(message))
+			fail(name, "expected error containing " .. formatValue(fragment) .. ", got " .. formatValue(message))
 		end
 	end
 
-	function self:suite(name)
-		self._suite = name
-		self._section = nil
+	harness.suite = function(_: Harness, name: string)
+		suiteName = name
+		sectionName = nil
 	end
 
-	function self:section(name)
-		self._section = name
+	harness.section = function(_: Harness, name: string)
+		sectionName = name
 		print(name)
 	end
 
-	function self:suiteError(name, err)
-		self.erroredSuites += 1
-		self:_fail("suite " .. name .. " errored", tostring(err))
+	harness.suiteError = function(_: Harness, name: string, err: any)
+		harness.erroredSuites += 1
+		fail("suite " .. name .. " errored", tostring(err))
 	end
 
-	function self:summary()
-		print(("%d passed, %d failed"):format(self.passed, self.failed))
+	harness.summary = function(_: Harness)
+		print(("%d passed, %d failed"):format(harness.passed, harness.failed))
 
-		if self.failed > 0 then
+		if harness.failed > 0 then
 			error("test failures", 2)
 		end
 	end
 
-	return self
+	return harness :: Harness
 end
 
 return TestHarness

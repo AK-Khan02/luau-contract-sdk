@@ -1,4 +1,4 @@
---!nocheck
+--!nonstrict
 
 local Contracts = require("../../src/Contracts")
 local ManualScheduler = require("../../src/Test/ManualScheduler")
@@ -55,19 +55,27 @@ return function(test)
 
 	local actor = { UserId = 1 }
 	local result = runtime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-	check("direct invoke fires started then settled", #events == 2
-		and events[1].phase == "started" and events[2].phase == "settled")
-	check("started event carries identity fields", events[1].event.action == "Grant"
-		and events[1].event.actor == actor and events[1].event.remote == nil)
+	check(
+		"direct invoke fires started then settled",
+		#events == 2 and events[1].phase == "started" and events[2].phase == "settled"
+	)
+	check(
+		"started event carries identity fields",
+		events[1].event.action == "Grant" and events[1].event.actor == actor and events[1].event.remote == nil
+	)
 	check("non-gated startedAt equals queuedAt", events[1].event.startedAt == events[1].event.queuedAt)
-	check("settled event reports the outcome", events[2].event.ok == true
-		and events[2].event.outcome == "Grant" and events[2].event.result == result)
+	check(
+		"settled event reports the outcome",
+		events[2].event.ok == true and events[2].event.outcome == "Grant" and events[2].event.result == result
+	)
 	check("settled event timestamps are ordered", events[2].event.settledAt >= events[2].event.startedAt)
 
 	events = {}
 	runtime:invoke("Grant", { payload = { id = 123 }, actor = actor })
-	check("validation failures inside runAction still settle", #events == 2
-		and events[2].event.ok == false and events[2].event.outcome == "ActionInputInvalid")
+	check(
+		"validation failures inside runAction still settle",
+		#events == 2 and events[2].event.ok == false and events[2].event.outcome == "ActionInputInvalid"
+	)
 
 	off()
 	events = {}
@@ -92,7 +100,7 @@ return function(test)
 	local gateSched = ManualScheduler.new(0)
 	local gateRuntime = buildRuntime(gateSched)
 	local slowThreads = {}
-	gateRuntime:implement("Slow", function(scope)
+	gateRuntime:implement("Slow", function(_scope)
 		table.insert(slowThreads, coroutine.running())
 		coroutine.yield()
 		return nil
@@ -127,16 +135,16 @@ return function(test)
 	check("first gated call settles ok", gateEvents[3] == "settled:Slow")
 	gateSched.spawn(slowThreads[2])
 	check("queued call settles", gateEvents[4] == "settled:Slow")
+	check("gated calls return action results", slowResults[1].ok == true and slowResults[2].ok == true)
 
 	-- Reject path: settled fires without started.
-	local rejectSystem = Contracts.system("RejectTap")
-		:action("Hold", {
-			input = Contracts.any(),
-			async = {
-				timeoutSeconds = false,
-				concurrency = "reject",
-			},
-		})
+	local rejectSystem = Contracts.system("RejectTap"):action("Hold", {
+		input = Contracts.any(),
+		async = {
+			timeoutSeconds = false,
+			concurrency = "reject",
+		},
+	})
 	local rejectSched = ManualScheduler.new()
 	local rejectRuntime = Contracts.runtime(rejectSystem, { scheduler = rejectSched })
 	local holdThread = nil
@@ -184,16 +192,19 @@ return function(test)
 	local passResult = wrapRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
 	check("wraps run outermost-first and share locals", seen[1] == "outer:Grant" and seen[2] == "inner:true")
 	check("passthrough returns the genuine result", passResult.ok == true and passResult.value.granted == true)
-	check("ctx exposes raw payload for direct invoke", (function()
-		local sawValidated = nil
-		local remove = wrapRuntime:use(function(ctx, next)
-			sawValidated = ctx.validated
-			return next()
-		end)
-		wrapRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-		remove()
-		return sawValidated == false
-	end)())
+	check(
+		"ctx exposes raw payload for direct invoke",
+		(function()
+			local sawValidated = nil
+			local remove = wrapRuntime:use(function(ctx, next)
+				sawValidated = ctx.validated
+				return next()
+			end)
+			wrapRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
+			remove()
+			return sawValidated == false
+		end)()
+	)
 
 	removePassthrough()
 	seen = {}
@@ -210,23 +221,54 @@ return function(test)
 		return ctx:fail("ServerOverloaded", "shed load")
 	end)
 	local failResult = failRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-	check("ctx:fail short-circuits without running the action", failResult.ok == false
-		and failResult.name == "ServerOverloaded" and handlerRan == false)
-	test:expectMatch("ctx:fail records a diagnostic with the reason",
-		wrapDiag:findByName("ServerOverloaded")[1].message, "shed load")
+	check(
+		"ctx:fail short-circuits without running the action",
+		failResult.ok == false and failResult.name == "ServerOverloaded" and handlerRan == false
+	)
+	test:expectMatch(
+		"ctx:fail records a diagnostic with the reason",
+		wrapDiag:findByName("ServerOverloaded")[1].message,
+		"shed load"
+	)
+
+	local asyncVetoSystem = Contracts.system("AsyncVeto"):action("Save", {
+		input = Contracts.any(),
+		async = {
+			timeoutSeconds = false,
+		},
+	})
+	local asyncVetoRuntime = Contracts.runtime(asyncVetoSystem)
+	local asyncHandlerRan = false
+	asyncVetoRuntime:implement("Save", function()
+		asyncHandlerRan = true
+		return nil
+	end)
+	asyncVetoRuntime:use(function(ctx, next)
+		return ctx:fail("MaintenanceMode", "paused")
+	end)
+	local asyncVeto = asyncVetoRuntime:invoke("Save", { payload = {}, actor = actor })
+	check(
+		"async middleware veto does not require scheduler",
+		asyncVeto.ok == false and asyncVeto.name == "MaintenanceMode" and asyncHandlerRan == false
+	)
 
 	local throwRuntime = buildRuntime(ManualScheduler.new(), wrapDiag)
 	throwRuntime:use(function()
 		error("middleware boom")
 	end)
 	local thrown = throwRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-	check("throwing middleware yields ActionMiddlewareError", thrown.ok == false
-		and thrown.name == "ActionMiddlewareError")
-	test:expectMatch("middleware error diagnostic carries the message",
-		wrapDiag:findByName("ActionMiddlewareError")[1].message, "middleware boom")
+	check(
+		"throwing middleware yields ActionMiddlewareError",
+		thrown.ok == false and thrown.name == "ActionMiddlewareError"
+	)
+	test:expectMatch(
+		"middleware error diagnostic carries the message",
+		wrapDiag:findByName("ActionMiddlewareError")[1].message,
+		"middleware boom"
+	)
 
 	local forgeRuntime = buildRuntime(ManualScheduler.new(), wrapDiag)
-	forgeRuntime:use(function(ctx, next)
+	forgeRuntime:use(function(_ctx, next)
 		next()
 		return { ok = true, name = "Forged", value = { granted = true } }
 	end)
@@ -241,15 +283,16 @@ return function(test)
 	check("nil without next is rejected", nilResult.ok == false and nilResult.name == "ActionMiddlewareInvalidResult")
 
 	local doubleRuntime = buildRuntime(ManualScheduler.new(), wrapDiag)
-	doubleRuntime:use(function(ctx, next)
+	doubleRuntime:use(function(_ctx, next)
 		next()
 		return next()
 	end)
 	local doubled = doubleRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-	check("double next() becomes ActionMiddlewareError", doubled.ok == false
-		and doubled.name == "ActionMiddlewareError")
-	test:expectMatch("double next() error explains itself",
-		doubled.reason, "next() already called")
+	check(
+		"double next() becomes ActionMiddlewareError",
+		doubled.ok == false and doubled.name == "ActionMiddlewareError"
+	)
+	test:expectMatch("double next() error explains itself", doubled.reason, "next() already called")
 
 	local lateFailRuntime = buildRuntime(ManualScheduler.new(), wrapDiag)
 	lateFailRuntime:use(function(ctx, next)
@@ -257,13 +300,15 @@ return function(test)
 		return ctx:fail("TooLate", "after the fact")
 	end)
 	local lateFail = lateFailRuntime:invoke("Grant", { payload = { id = "Sword" }, actor = actor })
-	check("ctx:fail after next() becomes ActionMiddlewareError", lateFail.ok == false
-		and lateFail.name == "ActionMiddlewareError")
+	check(
+		"ctx:fail after next() becomes ActionMiddlewareError",
+		lateFail.ok == false and lateFail.name == "ActionMiddlewareError"
+	)
 	test:expectMatch("late fail error explains itself", lateFail.reason, "cannot be called after next()")
 
 	local filterRuntime = buildRuntime(ManualScheduler.new(), wrapDiag)
 	local filterCalls = 0
-	filterRuntime:use(function(ctx, next)
+	filterRuntime:use(function(_ctx, next)
 		filterCalls += 1
 		return next()
 	end, { actions = { "Other" } })
@@ -272,16 +317,15 @@ return function(test)
 
 	test:section("Wraps on remote-bound actions")
 
-	local remoteSystem = Contracts.system("RemoteWrapped")
-		:action("Equip", {
-			input = Contracts.object({
-				id = Contracts.stringId(),
-			}, { allowExtra = false }),
-			remote = {
-				name = "EquipRemote",
-				direction = "server",
-			},
-		})
+	local remoteSystem = Contracts.system("RemoteWrapped"):action("Equip", {
+		input = Contracts.object({
+			id = Contracts.stringId(),
+		}, { allowExtra = false }),
+		remote = {
+			name = "EquipRemote",
+			direction = "server",
+		},
+	})
 	local remoteDiag = Contracts.diagnostics()
 	local remoteRuntime = Contracts.runtime(remoteSystem, {
 		diagnostics = remoteDiag,
@@ -316,8 +360,10 @@ return function(test)
 
 	invokeRemote({ UserId = 9 }, { id = "Bow" })
 	check("use() after bindRemote applies to remote calls", #remoteSeen == 1 and remoteHandled == 1)
-	check("remote ctx is validated with remote name", remoteSeen[1].validated == true
-		and remoteSeen[1].remote == "EquipRemote" and remoteSeen[1].payload.id == "Bow")
+	check(
+		"remote ctx is validated with remote name",
+		remoteSeen[1].validated == true and remoteSeen[1].remote == "EquipRemote" and remoteSeen[1].payload.id == "Bow"
+	)
 
 	local remoteVeto = remoteRuntime:use(function(ctx, next)
 		return ctx:fail("MaintenanceMode", "remotes disabled")
@@ -334,13 +380,12 @@ return function(test)
 
 	test:section("Wraps and cancellation")
 
-	local cancelSystem = Contracts.system("CancelWrapped")
-		:action("Save", {
-			input = Contracts.any(),
-			async = {
-				timeoutSeconds = false,
-			},
-		})
+	local cancelSystem = Contracts.system("CancelWrapped"):action("Save", {
+		input = Contracts.any(),
+		async = {
+			timeoutSeconds = false,
+		},
+	})
 	local cancelSched = ManualScheduler.new()
 	local cancelRuntime = Contracts.runtime(cancelSystem, {
 		scheduler = cancelSched,
@@ -351,7 +396,7 @@ return function(test)
 	end)
 
 	local unwound = nil
-	cancelRuntime:use(function(ctx, next)
+	cancelRuntime:use(function(_ctx, next)
 		local value = next()
 		unwound = value.name
 		return value
@@ -363,6 +408,8 @@ return function(test)
 		cancelResult = cancelRuntime:invoke("Save", { payload = {}, actor = cancelActorRef })
 	end)
 	cancelRuntime:cancelActor(cancelActorRef, "player-left")
-	check("force-settled cancellation unwinds through wraps", unwound == "ActionCancelled"
-		and cancelResult ~= nil and cancelResult.name == "ActionCancelled")
+	check(
+		"force-settled cancellation unwinds through wraps",
+		unwound == "ActionCancelled" and cancelResult ~= nil and cancelResult.name == "ActionCancelled"
+	)
 end

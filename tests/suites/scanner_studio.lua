@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 local PluginModel = require("../../plugin/LuauContractPluginModel")
@@ -12,13 +12,17 @@ return function(test)
 
 	test:section("StaticScanner")
 
-	local ruleIds = {}
+	local ruleIds: { [string]: boolean } = {}
 	for _, rule in ipairs(StaticScanner.rules()) do
 		ruleIds[rule.id] = true
 	end
-	check("scanner exposes registered rules", ruleIds["raw-remote-handler"] == true and ruleIds["async-without-token"] == true)
+	check(
+		"scanner exposes registered rules",
+		ruleIds["raw-remote-handler"] == true and ruleIds["async-without-token"] == true
+	)
 
-	local unsafeScan = StaticScanner.scanSource([[
+	local unsafeScan = StaticScanner.scanSource(
+		[[
 local Remote = {}
 local Workspace = {}
 
@@ -38,9 +42,11 @@ end)
 Remote:FireServer({
 	Action = "Deploy",
 })
-]], {
-		path = "Unsafe.server.lua",
-	})
+]],
+		{
+			path = "Unsafe.server.lua",
+		}
+	)
 
 	check("scanner finds unsafe source", unsafeScan.summary.total >= 5)
 	check("scanner reports raw remote handler", unsafeScan.summary.byRule["raw-remote-handler"] == 1)
@@ -48,9 +54,13 @@ Remote:FireServer({
 	check("scanner reports unowned destroy", unsafeScan.summary.byRule["unowned-destroy"] == 1)
 	check("scanner reports async without token", unsafeScan.summary.byRule["async-without-token"] == 1)
 	check("scanner reports raw remote fire", unsafeScan.summary.byRule["raw-remote-fire"] == 1)
-	check("scanner formats findings", string.find(StaticScanner.formatReport(unsafeScan), "raw-remote-handler", 1, true) ~= nil)
+	check(
+		"scanner formats findings",
+		string.find(StaticScanner.formatReport(unsafeScan), "raw-remote-handler", 1, true) ~= nil
+	)
 
-	local safeScan = StaticScanner.scanSource([[
+	local safeScan = StaticScanner.scanSource(
+		[[
 RemoteGuard.connect(Contract, "DeployRequest", Remote, function(player, payload)
 	return payload
 end)
@@ -69,19 +79,38 @@ local effectsFolder = Workspace:FindFirstChild("CombatEffects")
 if effectsFolder then
 	effectsFolder:ClearAllChildren()
 end
-]], {
-		path = "Safe.server.lua",
-	})
+]],
+		{
+			path = "Safe.server.lua",
+		}
+	)
 
 	check("scanner ignores guarded source", safeScan.summary.total == 0)
 
-	local ignoredScan = StaticScanner.scanSource([[
+	local ignoredScan = StaticScanner.scanSource(
+		[[
 tool:Destroy() -- contracts-scan: ignore unowned-destroy
-]], {
-		path = "Intentional.server.lua",
-	})
+]],
+		{
+			path = "Intentional.server.lua",
+		}
+	)
 
 	check("scanner supports inline ignore", ignoredScan.summary.total == 0)
+
+	local lexicalScan = StaticScanner.scanSource(
+		[[
+local documentation = "Remote.OnServerEvent:Connect(function() end)"
+local note = "Workspace:ClearAllChildren()"
+-- task.delay(1, function() child:Destroy() end)
+print(documentation, note)
+]],
+		{
+			path = "DocsOnly.server.lua",
+		}
+	)
+
+	check("scanner ignores patterns inside strings and comments", lexicalScan.summary.total == 0)
 
 	test:section("StudioReport")
 
@@ -129,17 +158,28 @@ end)
 
 	check("studio report counts scripts", studioReport.summary.scriptCount == 2)
 	check("studio report extracts contract systems", studioReport.summary.systemCount == 1)
+	local systemRow: any = studioReport.systems[1]
 	check(
 		"studio report extracts system details",
-		studioReport.systems[1].actions == 1
-			and studioReport.systems[1].remotes == 1
-			and studioReport.systems[1].postconditions == 1
+		systemRow.actions == 1 and systemRow.remotes == 1 and systemRow.postconditions == 1
 	)
 	check("studio report includes scanner findings", studioReport.summary.scannerFindingCount == 1)
-	check("studio report includes diagnostics", studioReport.summary.diagnosticCount == 1 and #studioReport.diagnostics == 1)
-	check("studio report formats systems", string.find(StudioReport.formatSystem(studioReport.systems[1]), "CombatService", 1, true) ~= nil)
-	check("studio report formats diagnostics", string.find(StudioReport.formatDiagnostic(studioReport.diagnostics[1]), "missing weapon", 1, true) ~= nil)
-	check("studio report formats findings", string.find(StudioReport.formatFinding(studioReport.scanner.findings[1]), "raw-remote-handler", 1, true) ~= nil)
+	check(
+		"studio report includes diagnostics",
+		studioReport.summary.diagnosticCount == 1 and #studioReport.diagnostics == 1
+	)
+	check(
+		"studio report formats systems",
+		string.find(StudioReport.formatSystem(systemRow), "CombatService", 1, true) ~= nil
+	)
+	check(
+		"studio report formats diagnostics",
+		string.find(StudioReport.formatDiagnostic(studioReport.diagnostics[1]), "missing weapon", 1, true) ~= nil
+	)
+	check(
+		"studio report formats findings",
+		string.find(StudioReport.formatFinding(studioReport.scanner.findings[1]), "raw-remote-handler", 1, true) ~= nil
+	)
 
 	test:section("StudioPluginModel")
 
@@ -165,7 +205,10 @@ end)
 	}
 
 	local scripts = PluginModel.collectScripts(fakeRoot)
-	check("plugin model collects script sources", #scripts == 1 and scripts[1].path == "ServerScriptService.MatchService")
+	check(
+		"plugin model collects script sources",
+		#scripts == 1 and scripts[1].path == "ServerScriptService.MatchService"
+	)
 
 	local cards = PluginModel.summaryCards(studioReport)
 	check("plugin model builds summary cards", #cards == 4 and cards[1].label == "Systems")

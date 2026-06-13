@@ -1,15 +1,22 @@
---!nocheck
+--!strict
 
 local TestHarness = require("./TestHarness")
 
-local suites = {
+type Suite = {
+	name: string,
+	run: (any) -> (),
+}
+
+local suites: { Suite } = {
 	{ name = "package_schema_lifecycle", run = require("./suites/package_schema_lifecycle") },
 	{ name = "diagnostics_system", run = require("./suites/diagnostics_system") },
+	{ name = "results", run = require("./suites/results") },
 	{ name = "action_contracts", run = require("./suites/action_contracts") },
 	{ name = "effect_plans", run = require("./suites/effect_plans") },
 	{ name = "lifecycle_sessions", run = require("./suites/lifecycle_sessions") },
 	{ name = "remote_policies_reports", run = require("./suites/remote_policies_reports") },
 	{ name = "runtime", run = require("./suites/runtime") },
+	{ name = "action_invoker", run = require("./suites/action_invoker") },
 	{ name = "middleware", run = require("./suites/middleware") },
 	{ name = "relay_publisher", run = require("./suites/relay_publisher") },
 	{ name = "async_actions", run = require("./suites/async_actions") },
@@ -21,9 +28,9 @@ local suites = {
 	{ name = "host_tools", run = require("./suites/host_tools") },
 }
 
-local filter = (...)
+local filter: any = (...)
 if filter ~= nil and filter ~= "" then
-	local matching = {}
+	local matching: { Suite } = {}
 	for _, suite in ipairs(suites) do
 		if string.find(suite.name, filter, 1, true) ~= nil then
 			table.insert(matching, suite)
@@ -33,7 +40,7 @@ if filter ~= nil and filter ~= "" then
 		error("no test suites match filter: " .. tostring(filter), 0)
 	end
 	suites = matching
-	print(("running %d suite(s) matching %q"):format(#suites, filter))
+	print(("running %d suite(s) matching %q"):format(#suites, tostring(filter)))
 end
 
 local test = TestHarness.new()
