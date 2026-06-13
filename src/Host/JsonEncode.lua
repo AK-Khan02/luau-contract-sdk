@@ -2,9 +2,9 @@
 
 local JsonEncode = {}
 
-local ESCAPES: {[string]: string} = {
+local ESCAPES: { [string]: string } = {
 	["\\"] = "\\\\",
-	["\""] = "\\\"",
+	['"'] = '\\"',
 	["\b"] = "\\b",
 	["\f"] = "\\f",
 	["\n"] = "\\n",
@@ -17,7 +17,7 @@ local function escapeControl(character: string): string
 end
 
 local function encodeString(value: string): string
-	return "\"" .. string.gsub(value, "[%z\1-\31\\\"]", escapeControl) .. "\""
+	return '"' .. string.gsub(value, '[%z\1-\31\\"]', escapeControl) .. '"'
 end
 
 local function isArray(value: any): boolean
@@ -35,7 +35,7 @@ local function isArray(value: any): boolean
 	return count == #value
 end
 
-local function sortedObjectEntries(value: {[any]: any}): {any}
+local function sortedObjectEntries(value: { [any]: any }): { any }
 	local entries = {}
 	for key, child in pairs(value) do
 		if child ~= nil then
@@ -51,7 +51,7 @@ local function sortedObjectEntries(value: {[any]: any}): {any}
 	return entries
 end
 
-local function encodeValue(value: any, seen: {[any]: boolean}): string
+local function encodeValue(value: any, seen: { [any]: boolean }): string
 	local valueType = type(value)
 
 	if value == nil then

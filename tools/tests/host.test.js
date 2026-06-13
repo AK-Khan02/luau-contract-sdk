@@ -11,9 +11,11 @@ const { attackCaseSummary, generateRemoteAttackTestFiles } = require("../lib/rem
 const { emitType } = require("../lib/luauTypeEmitter");
 const { discoverScripts } = require("../lib/projectDiscovery");
 const { renderReport } = require("../lib/reportWriters");
+const { parseArgs } = require("../luau-contract");
 
 const repoRoot = path.resolve(__dirname, "../..");
 const cliPath = path.join(repoRoot, "tools/luau-contract.js");
+const analyzePath = path.join(repoRoot, "tools/analyze-luau.js");
 
 function makeTempProject() {
 	const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "luau-contract-test-"));
@@ -42,6 +44,20 @@ test("glob matcher supports recursive Luau patterns", () => {
 	assert.equal(matcher.test("src/Inventory.lua"), true);
 	assert.equal(matcher.test("src/server/Inventory.lua"), true);
 	assert.equal(matcher.test("plugin/Inventory.lua"), false);
+});
+
+test("luau analyzer input includes top-level package entrypoints", () => {
+	const result = spawnSync(process.execPath, [analyzePath, "--print-files"], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+
+	assert.equal(result.status, 0, result.stderr || result.stdout);
+	const files = new Set(result.stdout.trim().split(/\n+/));
+	assert.equal(files.has("src/Contracts.lua"), true);
+	assert.equal(files.has("src/init.lua"), true);
+	assert.equal(files.has("tests/run.lua"), true);
+	assert.equal(files.has("tests/TestHarness.lua"), true);
 });
 
 test("project discovery maps Rojo paths and infers script classes", () => {
@@ -475,9 +491,17 @@ test("cli generates strict remote wrappers and verifies check mode", () => {
 		const manifest = fs.readFileSync(manifestPath, "utf8");
 		assert.match(client, /--!strict/);
 		assert.match(client, /export type InventoryServiceEquipItemPayload/);
-		assert.match(client, /function Client\.EquipItem/);
-		assert.match(server, /function Server\.guard/);
-		assert.match(server, /function Server\.bind\(runtime: any, remotes: \{\[string\]: any\}, handlersOrOptions: any\?, options: any\?\)/);
+		assert.match(client, /type InventoryServiceEquipItemRemoteEvent = \{/);
+		assert.match(client, /FireServer: \(InventoryServiceEquipItemRemoteEvent, InventoryServiceEquipItemPayload\) -> \(\)/);
+		assert.match(client, /function Client\.EquipItem\(remote: InventoryServiceEquipItemRemoteEvent, payload: InventoryServiceEquipItemPayload\)/);
+		assert.match(server, /type InventoryServiceEquipItemServerRemote = ServerRemoteEventLike/);
+		assert.match(server, /type InventoryServiceEquipItemRuntimeHandler = \(any, any\?\) -> InventoryServiceEquipItemResponse\?/);
+		assert.match(server, /type InventoryServiceEquipItemGuardHandler = \(PlayerLike, InventoryServiceEquipItemPayload, any\?\) -> InventoryServiceEquipItemResponse\?/);
+		assert.match(server, /type RuntimeLike = \{/);
+		assert.match(server, /type RuntimeHandlers = \{/);
+		assert.match(server, /type GuardHandlers = \{/);
+		assert.match(server, /function Server\.guard\(Contracts: ContractsLike, Contract: any, remotes: Remotes, handlers: GuardHandlers, options: GuardOptions\?\)/);
+		assert.match(server, /function Server\.bind\(runtime: RuntimeLike, remotes: Remotes, handlersOrOptions: \(RuntimeHandlers \| BindOptions\)\?, options: BindOptions\?\)/);
 		assert.match(manifest, /attackCaseCount/);
 
 		const check = spawnSync(process.execPath, [
@@ -649,6 +673,41 @@ test("cli rejects unknown commands with a non-zero exit", () => {
 	});
 	assert.notEqual(run.status, 0);
 	assert.match(run.stderr || run.stdout, /Unknown command: frobnicate/);
+});
+
+test("cli parser maps commands and options from registry definitions", () => {
+	const options = parseArgs([
+		"generate",
+		"tests",
+		"--root=project",
+		"--include",
+		"src/**/*.lua",
+		"--format",
+		"json, markdown",
+		"--format=sarif",
+		"--max-warnings",
+		"3",
+		"--contract-module=contracts/*.lua",
+		"--once",
+	]);
+
+	assert.equal(options.command, "generate");
+	assert.equal(options.target, "tests");
+	assert.equal(options.root, "project");
+	assert.deepEqual(options.include, ["src/**/*.lua"]);
+	assert.deepEqual(options.formats, ["json", "markdown", "sarif"]);
+	assert.equal(options.maxWarnings, 3);
+	assert.deepEqual(options.contractModules, ["contracts/*.lua"]);
+	assert.equal(options.once, true);
+});
+
+test("cli check command validates its registry target", () => {
+	const run = spawnSync(process.execPath, [cliPath, "check", "remotes"], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	assert.equal(run.status, 2);
+	assert.match(run.stderr || run.stdout, /Unknown check target: remotes/);
 });
 
 test("cli generate fails when the contract module glob matches nothing", () => {
@@ -911,11 +970,16 @@ test("cli scan reports generated wrapper and attack-test coverage", () => {
 	}
 });
 
-test("studio plugin shell calls real plugin APIs", () => {
-	const source = fs.readFileSync(path.join(repoRoot, "plugin/LuauContractStudioPlugin.lua"), "utf8");
-	assert.match(source, /plugin:CreateDockWidgetPluginGui\(/);
-	assert.doesNotMatch(source, /CreateDockWidgetPluginGuiAsync/);
-});
+	test("studio plugin shell delegates to strict plugin view", () => {
+		const shell = fs.readFileSync(path.join(repoRoot, "plugin/LuauContractStudioPlugin.lua"), "utf8");
+		const view = fs.readFileSync(path.join(repoRoot, "plugin/LuauContractStudioPluginView.lua"), "utf8");
+		assert.match(shell, /PluginView\.mount\(/);
+		assert.match(shell, /plugin = plugin/);
+		assert.doesNotMatch(shell, /CreateDockWidgetPluginGui/);
+		assert.match(view, /^--!strict/);
+		assert.match(view, /plugin:CreateDockWidgetPluginGui\(/);
+		assert.doesNotMatch(view, /CreateDockWidgetPluginGuiAsync/);
+	});
 
 test("relay envelope validation pins the wire shape", () => {
 	const { envelopeError } = require("../relay/server");

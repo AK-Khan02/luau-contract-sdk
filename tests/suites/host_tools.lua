@@ -1,4 +1,4 @@
---!nocheck
+--!strict
 
 local Contracts = require("../../src/Contracts")
 local JsonEncode = require("../../src/Host/JsonEncode")
@@ -71,10 +71,8 @@ end)
 			and baselinedReport.policy.suppressedByBaseline == 1
 	)
 
-	local fakeContract = Contracts.system("FakeInventory")
-		:strictPermissions()
-		:mayWrite("Player.Inventory")
-		:action("GrantItem", {
+	local fakeContract =
+		Contracts.system("FakeInventory"):strictPermissions():mayWrite("Player.Inventory"):action("GrantItem", {
 			writes = { "Player.Inventory" },
 		})
 

@@ -11,12 +11,12 @@ export type Decision = {
 	newErrors: number,
 	newWarnings: number,
 	exactErrors: number,
-	reasons: {string},
+	reasons: { string },
 }
 
 local ReportPolicy = {}
 
-local SEVERITY_ORDER: {[string]: number} = {
+local SEVERITY_ORDER: { [string]: number } = {
 	info = 1,
 	warn = 2,
 	error = 3,
@@ -32,7 +32,7 @@ local function findingKey(finding: any): string
 	}, "|")
 end
 
-local function baselineSet(keys: {string}?): {[string]: boolean}
+local function baselineSet(keys: { string }?): { [string]: boolean }
 	local set = {}
 	for _, key in ipairs(keys or {}) do
 		set[tostring(key)] = true
