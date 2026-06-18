@@ -1,5 +1,10 @@
 --!strict
 
+-- AsyncGate serializes (or rejects) overlapping in-flight calls that cross a
+-- yield. Roblox server code is single-threaded, so concurrency only arises across
+-- yields -- synchronous, non-yielding sequences are never racy. See
+-- docs/ENGINEERING.md "Concurrency and Threading Model".
+
 local AsyncGateExecution = require("./AsyncGateExecution")
 local AsyncGateResults = require("./AsyncGateResults")
 local Token = require("./AsyncToken")
