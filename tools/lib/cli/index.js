@@ -1,8 +1,10 @@
 "use strict";
 
 const { runGenerate } = require("./generateCommand");
+const { runInit } = require("./initCommand");
 const { parseArgs: parseCliArgs } = require("./parser");
 const { runMigrate } = require("./migrateCommand");
+const { runScaffold } = require("./scaffoldCommand");
 const { runScan } = require("./scanCommand");
 const { runTail } = require("./tailCommand");
 const { usage } = require("./usage");
@@ -36,6 +38,12 @@ const COMMANDS = {
 	},
 	tail: {
 		run: runTail,
+	},
+	scaffold: {
+		run: runScaffold,
+	},
+	init: {
+		run: runInit,
 	},
 };
 

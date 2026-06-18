@@ -694,6 +694,16 @@ handlers, raw remote firing, broad cleanup, and unowned destroys.
 
 ## CLI And CI
 
+Scaffold new contracts (or a whole project) instead of copy-pasting:
+
+```sh
+node tools/luau-contract.js init                                              # config + sample system
+node tools/luau-contract.js scaffold --system Inventory --actions Earn,Spend --out src/Inventory
+```
+
+Each scaffold writes a contract stub, a runtime-binding stub, and a `RemoteHarness`
+test stub. Pass `--force` to overwrite existing files.
+
 The SDK includes a host command for local scans and CI gates:
 
 ```sh

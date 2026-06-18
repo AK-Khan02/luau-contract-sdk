@@ -15,6 +15,8 @@ Usage:
   luau-contract migrate patch [options]
   luau-contract migrate contract [options]
   luau-contract tail --endpoint <url> [options]
+  luau-contract scaffold --system <Name> --actions <A,B,C> [options]
+  luau-contract init [options]
 
 Options:
   --root <path>              Project root to scan. Defaults to cwd.
@@ -47,6 +49,10 @@ Options:
   --since <seq>              Start tailing after this relay sequence number.
   --interval <seconds>       Poll interval for tail. Defaults to 2.
   --once                     Tail once and exit instead of polling.
+  --system <name>            System name for scaffolded stubs.
+  --actions <list>           Comma-separated action names to scaffold. Repeatable.
+  --remote-kind <kind>       Scaffold remotes as event or function. Defaults to event.
+  --force                    Overwrite existing files when scaffolding.
   --help                     Show this help.
 `;
 }

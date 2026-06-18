@@ -34,6 +34,10 @@ function defaultOptions() {
 		since: 0,
 		intervalSeconds: 2,
 		once: false,
+		system: null,
+		actions: [],
+		remoteKind: null,
+		force: false,
 		help: false,
 	};
 }
@@ -88,6 +92,10 @@ const OPTION_DEFINITIONS = {
 	"--since": { value: "since", coerce: Number },
 	"--interval": { value: "intervalSeconds", coerce: Number },
 	"--once": { flag: "once" },
+	"--system": { value: "system" },
+	"--actions": { apply: (options, value) => appendFormats(options.actions, value) },
+	"--remote-kind": { value: "remoteKind" },
+	"--force": { flag: "force" },
 };
 
 function splitOption(arg) {
