@@ -30,6 +30,75 @@ Use it to define and enforce:
 The core package is pure Luau. Roblox-specific behavior lives in thin adapters
 under `src/Roblox`.
 
+## Quickstart
+
+Scaffold a contract, a runtime binding, and a test in one command:
+
+```sh
+# new project: writes luau-contracts.json plus a sample Example/Ping system
+node tools/luau-contract.js init
+
+# or scaffold a specific system
+node tools/luau-contract.js scaffold --system Inventory --actions Earn --out src/Inventory
+```
+
+The full define → implement → call → test loop in ~30 lines:
+
+```lua
+local Contracts = require(game.ReplicatedStorage.Contracts)
+
+-- 1. Define the contract (an action that is also a server remote).
+local Inventory = Contracts.system("Inventory")
+	:strictPermissions()
+	:mayWrite("Player.Coins")
+	:action("Earn", {
+		input = Contracts.object({ amount = Contracts.integer(1, 1000) }, { allowExtra = false }),
+		output = Contracts.object({ earned = Contracts.integer() }, { allowExtra = false }),
+		writes = { "Player.Coins" },
+		remote = { name = "Earn", direction = "server" },
+	})
+
+-- 2. Bind a runtime and implement the handler.
+local runtime = Contracts.runtime(Inventory)
+runtime:implement("Earn", function(scope)
+	local amount = scope:payload().amount
+	-- Transactional by default: committed only if the action succeeds, else rolled back.
+	scope:write("Player.Coins", {
+		commit = function(context)
+			context.wallet.balance += amount
+		end,
+		rollback = function(context)
+			context.wallet.balance -= amount
+		end,
+	})
+	return { earned = amount }
+end)
+
+-- 3. Call it. `result.value` is the validated { earned = 50 }.
+local wallet = { balance = 0 }
+local result = runtime:invoke("Earn", {
+	payload = { amount = 50 },
+	context = { wallet = wallet },
+})
+assert(result.ok and wallet.balance == 50) -- the staged write committed
+```
+
+Test it with the bundled `RemoteHarness` — no Studio required, deterministic:
+
+```lua
+return function(test)
+	local harness = Contracts.Test.remoteHarness(Inventory)
+	harness:implement("Earn", function(scope)
+		return { earned = scope:payload().amount }
+	end)
+	harness:bind("Earn")
+
+	harness:call("Earn", { UserId = 1 }, { amount = 50 })
+	test:check("valid Earn runs the handler", harness:wasHandlerCalled("Earn"))
+	test:check("valid Earn records no diagnostic", harness:lastDiagnostic() == nil)
+end
+```
+
 ## Remote Workflow
 
 The primary workflow is:
@@ -675,6 +744,36 @@ The core package is Roblox-free and the core modules run in strict Luau mode, so
 these tests run outside Studio. The files under `src/Roblox` are thin adapters
 that should be exercised inside a Roblox place or with fake RemoteEvent-like
 objects.
+
+## Diagnostic Names
+
+Failures surface as structured results (`result.ok == false`, `result.name`) and as
+recorded diagnostics. The common names:
+
+| Name | Raised when |
+| --- | --- |
+| `ActionInputInvalid` | request payload fails the input schema |
+| `ActionOutputInvalid` | handler return fails the output schema |
+| `ActionContextInvalid` | context fails validation |
+| `WriteNotAllowed` / `ReadNotAllowed` / `CreateNotAllowed` / `DestroyNotAllowed` / `ForbiddenTouch` | a scope effect targets an undeclared path |
+| `ActionActorRejected` / `RemoteActorRejected` | actor policy denied the caller |
+| `ActionPostconditionFailed` | a postcondition returned false |
+| `LifecycleStaleRevision` | the session revision moved (e.g. during a yield) |
+| `LifecycleSessionMissing` / `LifecycleSessionError` | a named session could not be resolved or its resolver raised |
+| `ActionLifecycleTransitionInvalid` | the transition is not allowed from the current state |
+| `ActionBusy` | a duplicate async call was rejected (`reject` concurrency) |
+| `ActionTimeout` | an async handler exceeded its deadline |
+| `ActionCancelled` | the call was cancelled (timeout, player leave, or token) |
+| `ActionLateResult` | a timed-out/cancelled handler finished after the fact |
+| `ActionCommitFailed` | a staged effect commit threw; staged effects were rolled back |
+| `ActionRollbackFailed` / `ActionRollbackUnavailable` | rollback threw / no rollback hook was provided |
+| `ActionEagerEffectsNotRolledBack` | a failed action left `*Eager` mutations applied |
+| `RemotePayloadInvalid` / `RemoteResponseInvalid` | a remote payload/response failed validation |
+| `RemoteRateLimited` | the per-caller rate limit was exceeded |
+| `RelayPublisherDisabled` | the relay latched off after repeated auth failures |
+| `RuntimeTapError` | an `onAction` tap listener threw and was removed |
+
+See [docs/API.md](docs/API.md) for the full async and effect semantics.
 
 ## Documentation
 
