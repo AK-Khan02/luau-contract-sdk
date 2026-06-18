@@ -181,16 +181,21 @@ Contract:checkActionEffect("GrantItem", {
 }, diagnostics)
 ```
 
-Use staged effects for mutations that should not happen until output validation,
-postconditions, and lifecycle transition checks have passed:
+`scope:write` stages mutations by default, so they apply only after output
+validation, postconditions, and lifecycle transition checks have passed:
 
 ```lua
 runtime:implement("GrantItem", function(scope)
 	local itemId = scope:payload().ItemId
 
-	scope:stageWrite("Player.Inventory", function(context)
-		context.inventory[itemId] = true
-	end)
+	scope:write("Player.Inventory", {
+		commit = function(context)
+			context.inventory[itemId] = true
+		end,
+		rollback = function(context)
+			context.inventory[itemId] = nil
+		end,
+	})
 
 	return {
 		granted = true,

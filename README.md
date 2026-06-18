@@ -223,13 +223,21 @@ runtime:implement("GrantItem", function(scope)
 		return context.payload.ItemId
 	end)
 
-	return scope:write("Player.Inventory", function(context)
-		context.inventory[itemId] = true
-		return {
-			granted = true,
-			itemId = itemId,
-		}
-	end)
+	-- Transactional by default: this write commits only after output validation,
+	-- postconditions, and lifecycle checks pass, and rolls back otherwise.
+	scope:write("Player.Inventory", {
+		commit = function(context)
+			context.inventory[itemId] = true
+		end,
+		rollback = function(context)
+			context.inventory[itemId] = nil
+		end,
+	})
+
+	return {
+		granted = true,
+		itemId = itemId,
+	}
 end)
 
 local result = runtime:invoke("GrantItem", {

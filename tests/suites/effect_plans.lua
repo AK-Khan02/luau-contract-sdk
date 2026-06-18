@@ -390,7 +390,7 @@ return function(test)
 		session = eagerSession,
 		diagnostics = eagerDiag,
 	}, function(scope)
-		scope:write("Match.Rewards", function(context)
+		scope:writeEager("Match.Rewards", function(context)
 			context.inventory.EagerCoin = "applied"
 		end)
 		scope:stageWrite("Match.Rewards", {
@@ -525,4 +525,115 @@ return function(test)
 		"unavailable rollback records a diagnostic",
 		#noRollbackDiagnostics:findByName("ActionRollbackUnavailable") == 1
 	)
+
+	test:section("write() stages by default")
+
+	local CoinsOutput = Contracts.object({
+		coins = Contracts.integer(),
+	}, {
+		allowExtra = false,
+	})
+
+	local DefaultWrites = Contracts.system("DefaultStagedWrites")
+		:strictPermissions()
+		:mayWrite("Player.Coins")
+		:postcondition("CoinsDeferredUntilCommit", function(context)
+			-- A staged write() must not have applied yet while postconditions run.
+			return context.wallet.Coins == nil
+		end)
+		:postcondition("AlwaysRejects", function()
+			return false
+		end)
+		:action("Earn", {
+			output = CoinsOutput,
+			writes = { "Player.Coins" },
+			postconditions = { "CoinsDeferredUntilCommit" },
+		})
+		:action("EarnThenReject", {
+			output = CoinsOutput,
+			writes = { "Player.Coins" },
+			postconditions = { "AlwaysRejects" },
+		})
+
+	local earnWallet = {}
+	local earn = DefaultWrites:runAction("Earn", {
+		context = { wallet = earnWallet },
+	}, function(scope)
+		scope:write("Player.Coins", {
+			commit = function(context)
+				context.wallet.Coins = 100
+			end,
+			rollback = function(context)
+				context.wallet.Coins = nil
+			end,
+		})
+		return { coins = 100 }
+	end)
+	check(
+		"write() defers the mutation past postconditions, then commits it",
+		earn.ok == true and earnWallet.Coins == 100
+	)
+	check(
+		"write() records a committed write effect",
+		earn.effects[1].kind == "write" and earn.effects[1].status == "committed"
+	)
+
+	local rejectWallet = {}
+	local rejectedWrite = DefaultWrites:runAction("EarnThenReject", {
+		context = { wallet = rejectWallet },
+	}, function(scope)
+		scope:write("Player.Coins", {
+			commit = function(context)
+				context.wallet.Coins = 100
+			end,
+			rollback = function(context)
+				context.wallet.Coins = nil
+			end,
+		})
+		return { coins = 100 }
+	end)
+	check(
+		"write() never applies when a postcondition fails",
+		rejectedWrite.ok == false and rejectedWrite.name == "ActionPostconditionFailed" and rejectWallet.Coins == nil
+	)
+
+	local valueWallet = {}
+	local earnValue = DefaultWrites:runAction("Earn", {
+		context = { wallet = valueWallet },
+	}, function(scope)
+		-- Value form: stage a plain value, recorded as the effect result.
+		scope:write("Player.Coins", 250)
+		return { coins = 250 }
+	end)
+	check("write() value form succeeds and stays deferred", earnValue.ok == true)
+	check(
+		"write() value form records the value as the committed effect result",
+		earnValue.effects[1].status == "committed" and earnValue.effects[1].result == 250
+	)
+
+	local undeclared = DefaultWrites:runAction("Earn", {
+		context = { wallet = {} },
+	}, function(scope)
+		return scope:write("Player.Bank", {
+			commit = function() end,
+		})
+	end)
+	check(
+		"write() enforces declared paths before staging",
+		undeclared.ok == false and undeclared.name == "WriteNotAllowed"
+	)
+
+	local eagerWallet = {}
+	local eagerAppliedInHandler = nil
+	local eager = DefaultWrites:runAction("Earn", {
+		context = { wallet = eagerWallet },
+	}, function(scope)
+		scope:writeEager("Player.Coins", function(context)
+			context.wallet.Coins = 5
+		end)
+		eagerAppliedInHandler = eagerWallet.Coins
+		return { coins = 5 }
+	end)
+	check("writeEager() applies immediately inside the handler", eagerAppliedInHandler == 5)
+	check("writeEager() is not deferred, so it trips the deferral postcondition", eager.ok == false)
 end

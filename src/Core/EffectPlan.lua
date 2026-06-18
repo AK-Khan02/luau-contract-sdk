@@ -86,7 +86,11 @@ local function normalizeOperation(operation: any): any
 			commit = operation,
 		}
 	end
-	if type(operation) == "table" then
+	if type(operation) == "table" and (operation.commit ~= nil or operation.rollback ~= nil) then
+		-- A staged operation spec: { commit = fn, rollback = fn?, metadata = any? }.
+		-- Tables that carry commit/rollback are treated as operations so that a
+		-- forgotten/typo commit still fails loudly instead of being silently
+		-- recorded as a value.
 		if type(operation.commit) ~= "function" then
 			error("Staged effect table must include a commit function", 3)
 		end
@@ -99,7 +103,16 @@ local function normalizeOperation(operation: any): any
 			metadata = copyValue(operation.metadata),
 		}
 	end
-	error("Staged effect expects a commit function or effect table", 3)
+	-- A plain value (including data tables without commit/rollback): stage a commit
+	-- that records the value as the effect result. No rollback is registered because
+	-- no side effect runs at commit time -- pass a { commit, rollback } table when the
+	-- write performs real I/O that must be undone on rollback.
+	local value = operation
+	return {
+		commit = function()
+			return value
+		end,
+	}
 end
 
 local function record(diagnostics: any, fields: any): any

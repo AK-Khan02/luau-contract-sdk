@@ -148,39 +148,21 @@ function ActionScope.read(self: any, targetPath: string, valueOrReader: any): an
 	return runIfNeeded(valueOrReader, self._context)
 end
 
-function ActionScope.write(self: any, targetPath: string, valueOrWriter: any): any
-	local result = self:checkWrite(targetPath)
-	if not result.ok then
-		raiseViolation(result)
-	end
-	return runIfNeeded(valueOrWriter, self._context)
-end
+-- EFFECT MODEL -- transactional is the default.
+--
+-- scope:write / create / destroy / touch STAGE a mutation. The operation runs at
+-- commit time (after output validation, postconditions, and lifecycle checks pass)
+-- and is undone via its rollback if a later step fails. Pass a value, a
+-- `function(context)` commit, or a `{ commit = fn, rollback = fn? }` table. This is
+-- the safe default: a failed action never leaves a staged write applied.
+--
+-- scope:writeEager / createEager / destroyEager / touchEager are the NON-transactional
+-- escape hatch. They run their writer IMMEDIATELY and cannot be rolled back, so a
+-- later failure leaves the mutation applied (surfaced as an
+-- ActionEagerEffectsNotRolledBack diagnostic). Reach for these only when the write
+-- genuinely cannot be deferred. See docs/API.md and EffectPlan.eagerMutations.
 
-function ActionScope.create(self: any, targetPath: string, valueOrCreator: any): any
-	local result = self:checkEffect("create", targetPath)
-	if not result.ok then
-		raiseViolation(result)
-	end
-	return runIfNeeded(valueOrCreator, self._context)
-end
-
-function ActionScope.destroy(self: any, targetPath: string, valueOrDestroyer: any): any
-	local result = self:checkEffect("destroy", targetPath)
-	if not result.ok then
-		raiseViolation(result)
-	end
-	return runIfNeeded(valueOrDestroyer, self._context)
-end
-
-function ActionScope.touch(self: any, targetPath: string, valueOrToucher: any): any
-	local result = self:checkEffect("touch", targetPath)
-	if not result.ok then
-		raiseViolation(result)
-	end
-	return runIfNeeded(valueOrToucher, self._context)
-end
-
-function ActionScope.stageEffect(self: any, kind: string, targetPath: string, operation: any): any
+function ActionScope._stageMutation(self: any, kind: string, targetPath: string, operation: any): any
 	local result = self:_checkEffect(kind, targetPath)
 	if not result.ok then
 		raiseViolation(result)
@@ -188,20 +170,67 @@ function ActionScope.stageEffect(self: any, kind: string, targetPath: string, op
 	return self._effectPlan:stage(kind, targetPath, operation)
 end
 
+function ActionScope._eagerMutation(self: any, kind: string, targetPath: string, valueOrWriter: any): any
+	local result = self:checkEffect(kind, targetPath)
+	if not result.ok then
+		raiseViolation(result)
+	end
+	return runIfNeeded(valueOrWriter, self._context)
+end
+
+function ActionScope.write(self: any, targetPath: string, operation: any): any
+	return self:_stageMutation("write", targetPath, operation)
+end
+
+function ActionScope.create(self: any, targetPath: string, operation: any): any
+	return self:_stageMutation("create", targetPath, operation)
+end
+
+function ActionScope.destroy(self: any, targetPath: string, operation: any): any
+	return self:_stageMutation("destroy", targetPath, operation)
+end
+
+function ActionScope.touch(self: any, targetPath: string, operation: any): any
+	return self:_stageMutation("touch", targetPath, operation)
+end
+
+function ActionScope.writeEager(self: any, targetPath: string, valueOrWriter: any): any
+	return self:_eagerMutation("write", targetPath, valueOrWriter)
+end
+
+function ActionScope.createEager(self: any, targetPath: string, valueOrCreator: any): any
+	return self:_eagerMutation("create", targetPath, valueOrCreator)
+end
+
+function ActionScope.destroyEager(self: any, targetPath: string, valueOrDestroyer: any): any
+	return self:_eagerMutation("destroy", targetPath, valueOrDestroyer)
+end
+
+function ActionScope.touchEager(self: any, targetPath: string, valueOrToucher: any): any
+	return self:_eagerMutation("touch", targetPath, valueOrToucher)
+end
+
+-- Deprecated: stageWrite/stageCreate/stageDestroy/stageTouch/stageEffect remain as
+-- aliases now that write/create/destroy/touch stage by default. Prefer the shorter
+-- names; these will be removed in a future release.
+function ActionScope.stageEffect(self: any, kind: string, targetPath: string, operation: any): any
+	return self:_stageMutation(kind, targetPath, operation)
+end
+
 function ActionScope.stageWrite(self: any, targetPath: string, operation: any): any
-	return self:stageEffect("write", targetPath, operation)
+	return self:_stageMutation("write", targetPath, operation)
 end
 
 function ActionScope.stageCreate(self: any, targetPath: string, operation: any): any
-	return self:stageEffect("create", targetPath, operation)
+	return self:_stageMutation("create", targetPath, operation)
 end
 
 function ActionScope.stageDestroy(self: any, targetPath: string, operation: any): any
-	return self:stageEffect("destroy", targetPath, operation)
+	return self:_stageMutation("destroy", targetPath, operation)
 end
 
 function ActionScope.stageTouch(self: any, targetPath: string, operation: any): any
-	return self:stageEffect("touch", targetPath, operation)
+	return self:_stageMutation("touch", targetPath, operation)
 end
 
 function ActionScope.commitEffects(self: any, diagnostics: any?, options: any?): any

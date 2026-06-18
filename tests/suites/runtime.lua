@@ -134,7 +134,7 @@ return function(test)
 			return context.payload.ItemId
 		end)
 
-		return scope:write("Player.Inventory", function(context)
+		return scope:writeEager("Player.Inventory", function(context)
 			context.inventory[itemId] = true
 			return {
 				granted = true,

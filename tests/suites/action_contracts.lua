@@ -133,7 +133,7 @@ return function(test)
 			return context.payload.ItemId
 		end)
 
-		return scope:write("Player.Inventory", function(context)
+		return scope:writeEager("Player.Inventory", function(context)
 			context.inventory[itemId] = true
 			return {
 				granted = true,
@@ -214,7 +214,7 @@ return function(test)
 		},
 		diagnostics = writeDiagnostics,
 	}, function(scope)
-		return scope:write("Player.Profile", function()
+		return scope:writeEager("Player.Profile", function()
 			return {
 				granted = true,
 				itemId = "Shield",
@@ -246,7 +246,7 @@ return function(test)
 		},
 		diagnostics = forbiddenDiagnostics,
 	}, function(scope)
-		return scope:touch("Workspace.Map.Tile", function()
+		return scope:touchEager("Workspace.Map.Tile", function()
 			return {
 				granted = true,
 				itemId = "Shield",
@@ -497,7 +497,7 @@ return function(test)
 
 	local remoteDiagnostics = Contracts.diagnostics()
 	RemoteGuard.connect(remoteContract, "GrantRemote", fakeRemote, function(player, payload, scope)
-		return scope:write("Player.Inventory", function()
+		return scope:writeEager("Player.Inventory", function()
 			return {
 				granted = player == "PlayerA",
 				itemId = payload.ItemId,

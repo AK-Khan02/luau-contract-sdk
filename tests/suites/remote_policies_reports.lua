@@ -95,7 +95,7 @@ return function(test)
 	local remoteFunction = {}
 	local diagnostics = Contracts.diagnostics()
 	RemoteGuard.connect(Contract, "GrantItem", remoteFunction, function(_player, payload, scope)
-		return scope:write("Player.Inventory", function()
+		return scope:writeEager("Player.Inventory", function()
 			return {
 				granted = true,
 				itemId = payload.ItemId,

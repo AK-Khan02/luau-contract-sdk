@@ -112,11 +112,17 @@ local result = Contract:runAction("WeaponAction", {
 		return context.character
 	end)
 
-	return scope:write("Player.Backpack", function()
-		return {
-			accepted = payload.Action == "Fire",
-		}
-	end)
+	scope:write("Player.Backpack", {
+		commit = function(context)
+			-- TODO: apply the backpack change
+		end,
+		rollback = function(context)
+			-- TODO: undo the backpack change
+		end,
+	})
+	return {
+		accepted = payload.Action == "Fire",
+	}
 end)
 ```
 
@@ -170,17 +176,21 @@ The action scope passed to the handler exposes:
 - `scope:input()`
 - `scope:context()`
 - `scope:actor()`
-- `scope:read(path, readerOrValue)`
-- `scope:write(path, writerOrValue)`
-- `scope:create(path, creatorOrValue)`
-- `scope:destroy(path, destroyerOrValue)`
-- `scope:touch(path, toucherOrValue)`
-- `scope:stageEffect(kind, path, commitOrEffect)`
-- `scope:stageWrite(path, commitOrEffect)`
-- `scope:stageCreate(path, commitOrEffect)`
-- `scope:stageDestroy(path, commitOrEffect)`
-- `scope:stageTouch(path, commitOrEffect)`
+- `scope:read(path, readerOrValue)` — reads run immediately
+- `scope:write(path, valueOrOperation)` — **transactional** (staged); applies at the commit boundary
+- `scope:create(path, valueOrOperation)` — transactional (staged)
+- `scope:destroy(path, valueOrOperation)` — transactional (staged)
+- `scope:touch(path, valueOrOperation)` — transactional (staged)
+- `scope:writeEager(path, writerOrValue)` — non-transactional escape hatch; runs immediately, cannot roll back
+- `scope:createEager(path, writerOrValue)` — non-transactional escape hatch
+- `scope:destroyEager(path, writerOrValue)` — non-transactional escape hatch
+- `scope:touchEager(path, writerOrValue)` — non-transactional escape hatch
 - `scope:effects()`
+
+`valueOrOperation` is a plain value, a `function(context)` commit, or a
+`{ commit = fn, rollback = fn? }` table. `scope:stageWrite`, `stageCreate`,
+`stageDestroy`, `stageTouch`, and `stageEffect` remain as deprecated aliases of the
+matching `write`/`create`/`destroy`/`touch` calls.
 
 ## Async Actions
 
@@ -226,7 +236,7 @@ runtime:implement("GrantItem", function(scope)
 		print("cancelled:", reason)
 	end)
 
-	scope:stageWrite("PlayerData/Inventory", {
+	scope:write("PlayerData/Inventory", {
 		commit = grantItem,
 		rollback = revokeItem,
 	})
@@ -282,23 +292,22 @@ creates a private gate that `cancelOnLeave` cannot reach.
 
 ## Transactional Effect Plans
 
-> **Only staged effects are transactional.** Immediate scope helpers
-> (`scope:write`, `scope:create`, `scope:destroy`, `scope:touch`) run their
-> writer **the moment they are called**, before output validation,
-> postconditions, lifecycle transitions, and the commit boundary. If the action
-> fails any of those later checks — or a post-commit `session:apply` rolls the
-> action back — an eager mutation that already ran **stays applied**; the SDK
-> cannot undo an arbitrary writer function. When this happens the SDK records an
-> `ActionEagerEffectsNotRolledBack` warning naming the orphaned effects, but the
-> state is still mutated. For anything that must be atomic with the action's
-> success (currency, inventory, anything a client could exploit a partial write
-> of), use `scope:stageWrite`/`stageCreate`/`stageDestroy` with a `rollback`
-> hook instead of `scope:write`.
-
-Immediate scope helpers such as `scope:write(...)` still run the given function
-immediately after permission checks. Use staged effects when a mutation should
-only commit after output validation, postconditions, and lifecycle transition
-checks pass.
+> **`scope:write` is transactional by default.** `scope:write`, `scope:create`,
+> `scope:destroy`, and `scope:touch` *stage* their mutation: it runs at the commit
+> boundary — only after output validation, postconditions, and lifecycle
+> transitions pass — and is undone via its `rollback` if a later step fails. Pass a
+> plain value, a `function(context)` commit, or a `{ commit = fn, rollback = fn? }`
+> table.
+>
+> The `*Eager` helpers (`scope:writeEager`, `scope:createEager`,
+> `scope:destroyEager`, `scope:touchEager`) are the **non-transactional escape
+> hatch**: they run their writer **the moment they are called** and **cannot be
+> rolled back**. If the action fails a later check, an eager mutation that already
+> ran **stays applied**, and the SDK records an `ActionEagerEffectsNotRolledBack`
+> warning naming the orphaned effects. Reach for `*Eager` only when a write
+> genuinely cannot be deferred; for anything a client could exploit a partial write
+> of (currency, inventory), use the default staged `scope:write` with a `rollback`
+> hook.
 
 ```lua
 Contract
@@ -319,7 +328,7 @@ Contract
 runtime:implement("GrantItem", function(scope)
 	local itemId = scope:payload().ItemId
 
-	scope:stageWrite("Player.Inventory", {
+	scope:write("Player.Inventory", {
 		metadata = {
 			itemId = itemId,
 		},
@@ -353,9 +362,10 @@ If a staged effect commit fails, the SDK records `ActionCommitFailed`, rolls bac
 previously committed staged effects in reverse order, and returns the rollback
 report. If rollback fails, the SDK records `ActionRollbackFailed`; if no rollback
 hook exists, it records `ActionRollbackUnavailable`. Whenever a rollback runs and
-the action had also performed eager (non-staged) mutations, the SDK additionally
-records an `ActionEagerEffectsNotRolledBack` warning listing those mutations,
-which remain applied.
+the action had also performed eager (`scope:writeEager` and the other `*Eager`
+helpers) mutations, the SDK additionally records an
+`ActionEagerEffectsNotRolledBack` warning listing those mutations, which remain
+applied.
 
 Effect reports are serializable and include:
 
@@ -390,11 +400,17 @@ local runtime = Contracts.runtime(Contract, {
 runtime:implement("WeaponAction", function(scope, _request)
 	local payload = scope:payload()
 
-	return scope:write("Player.Backpack", function()
-		return {
-			accepted = payload.Action == "Fire",
-		}
-	end)
+	scope:write("Player.Backpack", {
+		commit = function(context)
+			-- TODO: apply the backpack change
+		end,
+		rollback = function(context)
+			-- TODO: undo the backpack change
+		end,
+	})
+	return {
+		accepted = payload.Action == "Fire",
+	}
 end)
 
 local result = runtime:invoke("WeaponAction", {
