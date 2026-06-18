@@ -1,0 +1,109 @@
+name: Contract Verify
+
+# Reusable workflow that proves a generated remote surface in CI: it regenerates
+# from the contract modules, fails on missing/stale committed wrappers, and runs
+# the generated attack tests. Consumers call it from their own workflow:
+#
+#   jobs:
+#     contracts:
+#       uses: AK-Khan02/robloxsdk/.github/workflows/contract-verify.yml@main
+#       with:
+#         contract-module: "src/**/*.contract.lua"
+#         generated-remotes: src/shared/ContractsGenerated
+#         generated-tests: tests/generated
+#         # sdk-require: "../../Packages/LuauContract"   # optional
+#
+# Assumes the `luau-contract` CLI is available via `npx` (installed as a project
+# dependency or vendored alongside package.json in `working-directory`).
+
+on:
+  workflow_call:
+    inputs:
+      contract-module:
+        description: Glob for contract modules (repeatable values comma-joined).
+        required: true
+        type: string
+      generated-remotes:
+        description: Directory of committed generated remote wrappers.
+        required: true
+        type: string
+      generated-tests:
+        description: Directory of committed generated attack tests.
+        required: true
+        type: string
+      sdk-require:
+        description: Require path the generated tests use to load the SDK (optional).
+        required: false
+        type: string
+        default: ""
+      node-version:
+        description: Node.js version.
+        required: false
+        type: string
+        default: "22"
+      luau-version:
+        description: Luau release tag to install.
+        required: false
+        type: string
+        default: "0.725"
+      working-directory:
+        description: Directory containing package.json / the project root.
+        required: false
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify generated remotes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install Node dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Install Luau toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/luau.zip"
+          install_dir="$RUNNER_TEMP/luau"
+          url="https://github.com/luau-lang/luau/releases/download/${{ inputs.luau-version }}/luau-ubuntu.zip"
+          curl --fail --location --show-error --silent "$url" --output "$archive"
+          mkdir -p "$install_dir"
+          unzip -q "$archive" -d "$install_dir"
+          chmod +x "$install_dir/luau" "$install_dir/luau-analyze"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Verify generated remote surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(verify remotes
+            --contract-module "${{ inputs.contract-module }}"
+            --generated-remotes "${{ inputs.generated-remotes }}"
+            --generated-tests "${{ inputs.generated-tests }}")
+          if [[ -n "${{ inputs.sdk-require }}" ]]; then
+            args+=(--sdk-require "${{ inputs.sdk-require }}")
+          fi
+          npx luau-contract "${args[@]}"
