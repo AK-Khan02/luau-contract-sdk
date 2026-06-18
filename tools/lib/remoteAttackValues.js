@@ -1,53 +1,17 @@
 "use strict";
 
-function quote(value) {
-	return JSON.stringify(String(value));
-}
+const { luaExpression, luaLiteral: encodeLuaLiteral, quote } = require("./luaLiteral");
 
-function isIdentifier(value) {
-	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
-}
-
-function luaKey(key) {
-	return isIdentifier(key) ? key : `[${quote(key)}]`;
-}
-
+// Multiline, JSON-string, spaced-array encoding that also honors the
+// { __luauExpression } raw-source escape hatch, with "nil" for unknown types.
 function luaLiteral(value, indent = "") {
-	if (value == null) {
-		return "nil";
-	}
-	if (typeof value === "object" && value.__luauExpression != null) {
-		return value.__luauExpression;
-	}
-	if (typeof value === "string") {
-		return quote(value);
-	}
-	if (typeof value === "number" || typeof value === "boolean") {
-		return String(value);
-	}
-	if (Array.isArray(value)) {
-		return `{ ${value.map((child) => luaLiteral(child, indent)).join(", ")} }`;
-	}
-	if (typeof value === "object") {
-		const entries = Object.entries(value);
-		if (entries.length === 0) {
-			return "{}";
-		}
-		const childIndent = `${indent}\t`;
-		const lines = ["{"];
-		for (const [key, child] of entries) {
-			lines.push(`${childIndent}${luaKey(key)} = ${luaLiteral(child, childIndent)},`);
-		}
-		lines.push(`${indent}}`);
-		return lines.join("\n");
-	}
-	return "nil";
-}
-
-function luaExpression(source) {
-	return {
-		__luauExpression: source,
-	};
+	return encodeLuaLiteral(value, indent, {
+		onUnknown: "nil",
+		allowExpression: true,
+		stringStyle: "json",
+		array: "spaced",
+		object: "multiline",
+	});
 }
 
 function validValue(schema) {

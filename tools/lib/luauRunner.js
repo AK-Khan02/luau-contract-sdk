@@ -4,45 +4,20 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { normalizePath } = require("./glob");
+const { luaLiteral: encodeLuaLiteral } = require("./luaLiteral");
 
 const JSON_MARKER = "__LUAU_CONTRACT_JSON__";
 
-function luaString(value) {
-	const text = String(value);
-	let level = 0;
-	while (text.includes(`]${"=".repeat(level)}]`)) {
-		level += 1;
-	}
-	return `[${"=".repeat(level)}[${text}]${"=".repeat(level)}]`;
-}
-
+// Compact, long-bracket-string encoding with sorted/undefined-filtered tables
+// that throws on unknown or non-finite values.
 function luaLiteral(value) {
-	if (value == null) {
-		return "nil";
-	}
-	if (typeof value === "string") {
-		return luaString(value);
-	}
-	if (typeof value === "number") {
-		if (!Number.isFinite(value)) {
-			throw new Error("Cannot encode non-finite number as Luau literal");
-		}
-		return String(value);
-	}
-	if (typeof value === "boolean") {
-		return value ? "true" : "false";
-	}
-	if (Array.isArray(value)) {
-		return `{${value.map((child) => luaLiteral(child)).join(",")}}`;
-	}
-	if (typeof value === "object") {
-		const entries = Object.entries(value)
-			.filter(([, child]) => child !== undefined)
-			.sort(([left], [right]) => left.localeCompare(right))
-			.map(([key, child]) => `[ ${luaString(key)} ]=${luaLiteral(child)}`);
-		return `{${entries.join(",")}}`;
-	}
-	throw new Error(`Cannot encode ${typeof value} as Luau literal`);
+	return encodeLuaLiteral(value, "", {
+		onUnknown: "throw",
+		stringStyle: "bracket",
+		array: "compact",
+		object: "compactSorted",
+		finiteNumbers: true,
+	});
 }
 
 function stripLuauExtension(filePath) {

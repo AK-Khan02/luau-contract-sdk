@@ -2,40 +2,21 @@
 
 const path = require("node:path");
 const { artifactFingerprint } = require("./contractArtifacts");
+const { luaLiteral: encodeLuaLiteral } = require("./luaLiteral");
 const { emitRemoteTypes } = require("./luauTypeEmitter");
 const { contractModel, manifestForContract } = require("./remoteContractModel");
 const { generateClientModule } = require("./remoteWrapperClientGenerator");
 const { GENERATED_HEADER, generatedHeader } = require("./remoteWrapperHeader");
 const { generateServerModule } = require("./remoteWrapperServerGenerator");
 
+// Multiline, JSON-string, spaced-array encoding with "nil" for unknown types.
 function luaLiteral(value, indent = "") {
-	if (value == null) {
-		return "nil";
-	}
-	if (typeof value === "string") {
-		return JSON.stringify(value);
-	}
-	if (typeof value === "number" || typeof value === "boolean") {
-		return String(value);
-	}
-	if (Array.isArray(value)) {
-		return `{ ${value.map((child) => luaLiteral(child, indent)).join(", ")} }`;
-	}
-	if (typeof value === "object") {
-		const entries = Object.entries(value);
-		if (entries.length === 0) {
-			return "{}";
-		}
-		const childIndent = `${indent}\t`;
-		const lines = ["{"];
-		for (const [key, child] of entries) {
-			const keyText = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? key : `[${JSON.stringify(key)}]`;
-			lines.push(`${childIndent}${keyText} = ${luaLiteral(child, childIndent)},`);
-		}
-		lines.push(`${indent}}`);
-		return lines.join("\n");
-	}
-	return "nil";
+	return encodeLuaLiteral(value, indent, {
+		onUnknown: "nil",
+		stringStyle: "json",
+		array: "spaced",
+		object: "multiline",
+	});
 }
 
 function generateTypesModule(contract, options) {
