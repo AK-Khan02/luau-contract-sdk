@@ -6,7 +6,7 @@ name: Contract Verify
 #
 #   jobs:
 #     contracts:
-#       uses: AK-Khan02/robloxsdk/.github/workflows/contract-verify.yml@main
+#       uses: AK-Khan02/luau-contract-sdk/.github/workflows/contract-verify.yml@main
 #       with:
 #         contract-module: "src/**/*.contract.lua"
 #         generated-remotes: src/shared/ContractsGenerated
