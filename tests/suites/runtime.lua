@@ -249,6 +249,64 @@ return function(test)
 	})
 	check("runtime remote enforces rate limits", limited == nil and diagnostics:last().name == "RemoteRateLimited")
 
+	-- A lifecycle session resolver that raises must reject the call gracefully
+	-- (RemoteGuardLifecycle.callResolver pcall-wraps it), never crash the handler.
+	local resolverCrashDiagnostics = Contracts.diagnostics()
+	local resolverCrashRemote = {}
+	runtime:bindRemote("GrantItem", resolverCrashRemote, {
+		overwrite = true,
+		sessions = {
+			inventory = function()
+				error("resolver boom")
+			end,
+		},
+		context = {
+			inventory = inventory,
+		},
+		diagnostics = resolverCrashDiagnostics,
+	})
+	local resolverCrash = resolverCrashRemote.OnServerInvoke(admin, {
+		ItemId = "Shield",
+		Revision = 0,
+	})
+	check("throwing session resolver rejects the call instead of crashing", resolverCrash == nil)
+	check(
+		"throwing session resolver surfaces a LifecycleSessionError",
+		#resolverCrashDiagnostics:findByName("LifecycleSessionError") == 1
+	)
+
+	test:section("Runtime taps")
+
+	local TapContract = Contracts.system("TapService"):action("Ping", {
+		output = Contracts.object({
+			ok = Contracts.boolean(),
+		}, {
+			allowExtra = false,
+		}),
+	})
+	local tapDiagnostics = Contracts.diagnostics()
+	local tapRuntime = Contracts.runtime(TapContract, {
+		diagnostics = tapDiagnostics,
+	})
+	tapRuntime:implement("Ping", function()
+		return { ok = true }
+	end)
+	local tapRuns = 0
+	tapRuntime:onAction({
+		settled = function()
+			tapRuns += 1
+			error("tap boom")
+		end,
+	})
+	local firstPing = tapRuntime:invoke("Ping")
+	local secondPing = tapRuntime:invoke("Ping")
+	check("a throwing tap does not break the action", firstPing.ok == true and secondPing.ok == true)
+	check("a throwing tap is removed after its first error", tapRuns == 1)
+	check(
+		"a throwing tap is surfaced as a RuntimeTapError diagnostic",
+		#tapDiagnostics:findByName("RuntimeTapError") == 1
+	)
+
 	local BadResponseContract = Contracts.system("BadResponseService"):action("BadPing", {
 		input = Contracts.object({}, {
 			allowExtra = false,

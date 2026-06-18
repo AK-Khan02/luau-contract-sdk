@@ -307,9 +307,24 @@ function Runtime._emitTap(self: Runtime, phase: string, event: unknown)
 	for token, tap in pairs(self._taps) do
 		local listener = (tap :: any)[phase]
 		if listener ~= nil then
-			local ok = pcall(listener, event)
+			local ok, err = pcall(listener, event)
 			if not ok then
+				-- A tap is an observability hook; drop the one that errored, but
+				-- record why so a crashing metrics/logging tap is not lost silently.
 				self._taps[token] = nil
+				Result.record(self._diagnostics, {
+					level = "warn",
+					category = "runtime",
+					system = systemName(self._system),
+					name = "RuntimeTapError",
+					message = "tap listener for phase '"
+						.. tostring(phase)
+						.. "' errored and was removed: "
+						.. tostring(err),
+					context = {
+						phase = phase,
+					},
+				})
 			end
 		end
 	end

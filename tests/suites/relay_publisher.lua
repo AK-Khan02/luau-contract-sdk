@@ -273,6 +273,10 @@ return function(test)
 		"repeated 401s latch the publisher off",
 		authHandle.stats().disabled == true and #authHttp.requests == 3 and authHandle.stats().droppedRetry == 3
 	)
+	check(
+		"latching off records a RelayPublisherDisabled diagnostic exactly once",
+		#authDiag:findByName("RelayPublisherDisabled") == 1
+	)
 	authDiag:record({ level = "error", name = "AfterLatch" })
 	authSched.advance(0.3)
 	authHandle.step()

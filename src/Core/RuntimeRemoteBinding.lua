@@ -27,6 +27,12 @@ local function remoteRequest(runtime: any, remoteName: string, bindOptions: any,
 	})
 end
 
+-- Builds the lazy session registry handed to RemoteGuard as options.sessions.
+-- The per-session resolver below may raise or return nil; that is intentional and
+-- safe because RemoteGuardLifecycle.callResolver pcall-wraps every invocation and
+-- records a LifecycleSessionError, so a faulty resolver rejects the remote call
+-- rather than crashing the handler. Regression: tests/suites/runtime.lua
+-- ("throwing session resolver ...").
 local function remoteSessions(runtime: any, bindOptions: any): any
 	local localSessions: any = bindOptions.sessions or bindOptions.lifecycleSessions or {}
 	local sessions: any = {}

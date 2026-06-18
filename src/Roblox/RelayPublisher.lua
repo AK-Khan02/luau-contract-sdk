@@ -236,6 +236,37 @@ function RelayPublisher.publish(diagnostics: any, options: any): any
 		attempts = 0
 	end
 
+	-- Surface the latch loudly: once the relay disables itself the game would
+	-- otherwise stop relaying with no signal beyond stats.disabled. Record a
+	-- diagnostic (best effort) and fire an optional onDisabled hook. Runs from
+	-- send(), i.e. inside a spawned task rather than synchronously under
+	-- Diagnostics:record, so recording here cannot re-enter the pipeline.
+	local function recordDisabled()
+		if diagnostics ~= nil and type(diagnostics.record) == "function" then
+			local recordFn = diagnostics.record :: (any, any) -> any
+			pcall(recordFn, diagnostics, {
+				level = "error",
+				category = "relay",
+				name = "RelayPublisherDisabled",
+				message = "relay publisher disabled after "
+					.. tostring(authFailures)
+					.. " consecutive auth failures (401); diagnostics will no longer be relayed",
+				context = {
+					endpoint = endpoint,
+					authFailures = authFailures,
+				},
+			})
+		end
+		if type(options.onDisabled) == "function" then
+			local onDisabled = options.onDisabled :: (any) -> ()
+			pcall(onDisabled, {
+				reason = "authFailures",
+				authFailures = authFailures,
+				endpoint = endpoint,
+			})
+		end
+	end
+
 	local function send()
 		local batchCount = #outbox
 		local batches: { any } = {}
@@ -278,8 +309,9 @@ function RelayPublisher.publish(diagnostics: any, options: any): any
 		if status == 401 then
 			authFailures += 1
 			dropBatches(batches)
-			if authFailures >= AUTH_FAILURE_LATCH then
+			if authFailures >= AUTH_FAILURE_LATCH and not stats.disabled then
 				stats.disabled = true
+				recordDisabled()
 			end
 			return
 		end
