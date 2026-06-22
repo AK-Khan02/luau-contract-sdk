@@ -1,12 +1,45 @@
 --!strict
 
+local DurableEffect = require("./DurableEffect")
 local EffectPlan = require("./EffectPlan")
+
+-- Snapshot a value so a later in-place mutation cannot corrupt the captured copy.
+-- Inlined (rather than TableUtil.deepCopy) so the analyzer resolves a precise
+-- return type at the writeDurable call site.
+local function snapshotValue(value: any, seen: any?): any
+	if type(value) ~= "table" then
+		return value
+	end
+
+	local visited = seen or {}
+	if visited[value] ~= nil then
+		return visited[value]
+	end
+
+	local copy = {}
+	visited[value] = copy
+	for key, child in pairs(value) do
+		copy[snapshotValue(key, visited)] = snapshotValue(child, visited)
+	end
+	return copy
+end
 
 export type Effect = {
 	kind: string,
 	target: string,
 	status: string?,
 	metadata: any?,
+}
+
+-- The subset of a DurableProfile handle that writeDurable depends on. Casting the
+-- injected handle to this structural type lets the analyzer resolve precise
+-- result types for the method calls below.
+type DurableProfileHandle = {
+	value: (DurableProfileHandle) -> any,
+	set: (DurableProfileHandle, any) -> (),
+	key: (DurableProfileHandle) -> string,
+	lock: (DurableProfileHandle) -> any,
+	store: (DurableProfileHandle) -> any,
 }
 
 local ActionScope: any = {}
@@ -192,6 +225,52 @@ end
 
 function ActionScope.touch(self: any, targetPath: string, operation: any): any
 	return self:_stageMutation("touch", targetPath, operation)
+end
+
+-- writeDurable stages a session-locked durable write against a loaded profile. It
+-- goes through the same write permission gate as scope:write (an undeclared
+-- durable path still fails WriteNotAllowed), captures the profile's current value
+-- as the compensating rollback value, computes the new value (a plain value or a
+-- `transform(previous)`), and stages a DurableEffect operation. Because it is an
+-- ordinary kind="write" effect, it persists only at the commit boundary, rolls
+-- back/compensates on failure, and participates with in-memory writes in one
+-- transaction -- it is transactional, never eager.
+function ActionScope.writeDurable(self: any, targetPath: string, profile: any, valueOrTransform: any): any
+	local result = self:_checkEffect("write", targetPath)
+	if not result.ok then
+		raiseViolation(result)
+	end
+
+	if type(profile) ~= "table" or type(profile.value) ~= "function" then
+		error("scope:writeDurable expects a loaded profile handle", 2)
+	end
+
+	local handle = profile :: DurableProfileHandle
+
+	-- Snapshot the pre-write value as the compensating rollback target BEFORE the
+	-- transform runs. ProfileService-style handlers commonly mutate the value
+	-- table in place and return it, which would otherwise alias `previous` and
+	-- corrupt the rollback. The deep copy keeps the rollback value pristine.
+	local current: any = handle:value()
+	local previous = snapshotValue(current)
+	local newValue: any
+	if type(valueOrTransform) == "function" then
+		local transform = valueOrTransform :: (any) -> any
+		newValue = transform(current)
+	else
+		newValue = valueOrTransform
+	end
+	handle:set(newValue)
+
+	local operation = DurableEffect.operation({
+		store = handle:store(),
+		key = handle:key(),
+		lock = handle:lock(),
+		value = newValue,
+		previous = previous,
+	})
+
+	return self._effectPlan:stage("write", targetPath, operation)
 end
 
 function ActionScope.writeEager(self: any, targetPath: string, valueOrWriter: any): any

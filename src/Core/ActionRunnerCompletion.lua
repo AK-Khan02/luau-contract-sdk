@@ -1,9 +1,56 @@
 --!strict
 
+local DurableEffect = require("./DurableEffect")
 local Result = require("./Result")
 local Guards = require("./ActionRunnerGuards")
 
 local Completion = {}
+
+-- After a failed commit (and any failed lifecycle rollback), surface the durable
+-- diagnostic carried by each failed durable effect at error level. Durable
+-- effects mark themselves via metadata.diagnostic and carry the concrete name
+-- (SessionLockLost / DurableCommitFailed) in their recorded error. This mirrors
+-- warnEagerEffectsNotRolledBack: an extra diagnostic recorded about effects once
+-- the transaction outcome is known.
+local FAILED_DURABLE_STATUS: { [string]: boolean } = {
+	failed = true,
+	rollbackFailed = true,
+}
+
+local function recordDurableEffectFailures(
+	systemContract: unknown,
+	scope: any,
+	diagnostics: unknown,
+	actionName: string,
+	context: { [unknown]: unknown }
+)
+	for _, effect in ipairs(scope:effects()) do
+		local metadata = effect.metadata
+		local isDurable = type(metadata) == "table" and metadata.diagnostic ~= nil
+		if isDurable and FAILED_DURABLE_STATUS[tostring(effect.status)] == true then
+			local name = DurableEffect.diagnosticName(effect.error)
+			Result.record(diagnostics, {
+				level = "error",
+				category = "effect",
+				system = Guards.systemName(systemContract),
+				name = name,
+				message = "durable effect on "
+					.. tostring(effect.target)
+					.. " in action "
+					.. actionName
+					.. " failed ("
+					.. tostring(effect.error)
+					.. ")",
+				context = {
+					action = actionName,
+					remote = context.remote,
+					target = effect.target,
+					status = effect.status,
+				},
+			})
+		end
+	end
+end
 
 local function warnEagerEffectsNotRolledBack(
 	systemContract: unknown,
@@ -177,6 +224,7 @@ function Completion.finish(
 	local commit = scope:commitEffects(diagnostics, effectOptions)
 	context.effects = scope:effectView()
 	if not commit.ok then
+		recordDurableEffectFailures(systemContract, scope, diagnostics, actionName, context)
 		warnEagerEffectsNotRolledBack(systemContract, scope, diagnostics, actionName, context)
 		return {
 			ok = false,
@@ -202,6 +250,7 @@ function Completion.finish(
 	if not lifecycle.ok then
 		local rollback = scope:rollbackEffects(diagnostics, effectOptions)
 		context.effects = scope:effectView()
+		recordDurableEffectFailures(systemContract, scope, diagnostics, actionName, context)
 		warnEagerEffectsNotRolledBack(systemContract, scope, diagnostics, actionName, context)
 		return {
 			ok = false,
