@@ -12,6 +12,7 @@ skills-lock.json
 .agent-instructions/
 agent-instructions*/
 AGENTS.md.local
+CLAUDE.md
 *.local.md
 *agent-plan*
 *agent-instruct*
