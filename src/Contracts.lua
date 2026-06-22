@@ -3,6 +3,9 @@
 local AsyncGate = require("./Core/AsyncGate")
 local Diagnostics = require("./Core/Diagnostics")
 local DiagnosticReport = require("./Core/DiagnosticReport")
+local DurableEffect = require("./Core/DurableEffect")
+local DurableProfile = require("./Core/DurableProfile")
+local DurableTransaction = require("./Core/DurableTransaction")
 local EffectPlan = require("./Core/EffectPlan")
 local Host = require("./Host")
 local Invariant = require("./Core/Invariant")
@@ -11,6 +14,7 @@ local LifecycleSession = require("./Core/LifecycleSession")
 local OverlayFeed = require("./Core/OverlayFeed")
 local Package = require("./Package")
 local RateLimiter = require("./Core/RateLimiter")
+local Reconcile = require("./Core/Reconcile")
 local Roblox = require("./Roblox")
 local Runtime = require("./Core/Runtime")
 local Schema = require("./Core/Schema")
@@ -38,6 +42,9 @@ local Contracts = {
 	AsyncGate = AsyncGate,
 	Diagnostics = Diagnostics,
 	DiagnosticReport = DiagnosticReport,
+	DurableEffect = DurableEffect,
+	DurableProfile = DurableProfile,
+	DurableTransaction = DurableTransaction,
 	EffectPlan = EffectPlan,
 	Host = Host,
 	Invariant = Invariant,
@@ -46,6 +53,7 @@ local Contracts = {
 	OverlayFeed = OverlayFeed,
 	Package = Package,
 	RateLimiter = RateLimiter,
+	Reconcile = Reconcile,
 	Roblox = Roblox,
 	Runtime = Runtime,
 	Schema = Schema,
@@ -66,6 +74,14 @@ end
 
 function Contracts.lifecycleSession(systemContract, initialStates, options)
 	return LifecycleSession.new(systemContract, initialStates, options)
+end
+
+function Contracts.loadProfile(store, key, options)
+	return DurableProfile.load(store, key, options)
+end
+
+function Contracts.durableTransaction(store)
+	return DurableTransaction.new(store)
 end
 
 function Contracts.runtime(systemContract, options)
@@ -153,6 +169,12 @@ local EXPERIMENTAL_API_NAMES = freezeTable({
 	"StaticScanner",
 	"Studio",
 	"Test",
+	"DurableEffect",
+	"DurableProfile",
+	"loadProfile",
+	"DurableTransaction",
+	"durableTransaction",
+	"Reconcile",
 })
 
 local INTERNAL_API_NAMES = freezeTable({
@@ -204,6 +226,12 @@ Contracts.Experimental = freezeTable({
 	StaticScanner = StaticScanner,
 	Studio = Studio,
 	Test = Test,
+	DurableEffect = DurableEffect,
+	DurableProfile = DurableProfile,
+	loadProfile = Contracts.loadProfile,
+	DurableTransaction = DurableTransaction,
+	durableTransaction = Contracts.durableTransaction,
+	Reconcile = Reconcile,
 })
 
 Contracts.Internal = freezeTable({

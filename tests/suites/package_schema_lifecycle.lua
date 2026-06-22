@@ -20,6 +20,42 @@ return function(test)
 	check("package root exports static scanner", PackageRoot.StaticScanner == Contracts.StaticScanner)
 	check("package root exports studio report", PackageRoot.Studio.StudioReport == Contracts.Studio.StudioReport)
 	check("package root exports lifecycle sessions", PackageRoot.LifecycleSession == Contracts.LifecycleSession)
+	check("package root exports durable effect builder", PackageRoot.DurableEffect == Contracts.DurableEffect)
+	check("package root exports durable profile", PackageRoot.DurableProfile == Contracts.DurableProfile)
+	check("package root exports durable transaction", PackageRoot.DurableTransaction == Contracts.DurableTransaction)
+	check("package root exports reconcile", PackageRoot.Reconcile == Contracts.Reconcile)
+	check("package exposes loadProfile convenience constructor", type(Contracts.loadProfile) == "function")
+	check(
+		"package exposes durableTransaction convenience constructor",
+		type(Contracts.durableTransaction) == "function"
+	)
+	check(
+		"package classifies durable persistence as experimental",
+		Contracts.Experimental.DurableEffect == Contracts.DurableEffect
+			and Contracts.Experimental.DurableProfile == Contracts.DurableProfile
+			and Contracts.Experimental.DurableTransaction == Contracts.DurableTransaction
+			and Contracts.Experimental.loadProfile == Contracts.loadProfile
+			and Contracts.Experimental.durableTransaction == Contracts.durableTransaction
+			and Contracts.Experimental.Reconcile == Contracts.Reconcile
+	)
+	check("package exposes ProfileStore adapter", Contracts.Roblox.ProfileStore ~= nil)
+	local function experimentalLists(name)
+		for _, entry in ipairs(Contracts.publicApi.experimental) do
+			if entry == name then
+				return true
+			end
+		end
+		return false
+	end
+	check(
+		"experimental name list includes durable persistence entries",
+		experimentalLists("DurableEffect")
+			and experimentalLists("DurableProfile")
+			and experimentalLists("loadProfile")
+			and experimentalLists("DurableTransaction")
+			and experimentalLists("durableTransaction")
+			and experimentalLists("Reconcile")
+	)
 	check("package root exports runtime", PackageRoot.Runtime == Contracts.Runtime)
 	check("package root exports host tools", PackageRoot.Host.ScanRunner ~= nil)
 	check(
