@@ -15,6 +15,7 @@ return {
 	PlayerCancellation = load("./PlayerCancellation", "./Roblox/PlayerCancellation"),
 	PlayersService = load("./PlayersService", "./Roblox/PlayersService"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
+	ProfileStore = load("./ProfileStore", "./Roblox/ProfileStore"),
 	RelayPublisher = load("./RelayPublisher", "./Roblox/RelayPublisher"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),
 	StudioBridgePublisher = load("./StudioBridgePublisher", "./Roblox/StudioBridgePublisher"),
