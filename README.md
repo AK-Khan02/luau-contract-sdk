@@ -766,8 +766,13 @@ recorded diagnostics. The common names:
 | `ActionCancelled` | the call was cancelled (timeout, player leave, or token) |
 | `ActionLateResult` | a timed-out/cancelled handler finished after the fact |
 | `ActionCommitFailed` | a staged effect commit threw; staged effects were rolled back |
-| `ActionRollbackFailed` / `ActionRollbackUnavailable` | rollback threw / no rollback hook was provided |
+| `ActionRollbackFailed` / `ActionRollbackUnavailable` | rollback threw / no rollback hook was provided. On a **durable** effect this is a reconciliation signal: a multi-key trade has no two-phase commit, so a failed compensation can leave it non-atomic — reconcile the affected keys out of band (see [API: Partial failure](docs/API.md#partial-failure-no-two-phase-commit)) |
 | `ActionEagerEffectsNotRolledBack` | a failed action left `*Eager` mutations applied |
+| `SessionLockUnavailable` | a durable profile could not acquire the session lock (another server holds it) |
+| `SessionLockLost` | a durable write detected the session lock was lost across the save yield; it fails closed instead of double-committing |
+| `DurableCommitFailed` | a durable `store:save` returned a non-lock failure at commit |
+| `DurableTransactionAborted` | a multi-profile durable transaction released its already-acquired locks after a load failed (e.g. one profile was locked by another server) |
+| `ProfileMigrationFailed` | a schema migration step threw while loading a durable profile with `migrations`; the load fails and releases the freshly acquired lock |
 | `RemotePayloadInvalid` / `RemoteResponseInvalid` | a remote payload/response failed validation |
 | `RemoteRateLimited` | the per-caller rate limit was exceeded |
 | `RelayPublisherDisabled` | the relay latched off after repeated auth failures |

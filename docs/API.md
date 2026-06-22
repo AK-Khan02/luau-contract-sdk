@@ -379,6 +379,258 @@ Effect reports are serializable and include:
 Common statuses are `planned`, `committed`, `rolledBack`, `failed`,
 `rollbackFailed`, and `rollbackUnavailable`.
 
+## Durable Persistence
+
+> **Experimental.** The durable persistence layer (`Contracts.DurableProfile`,
+> `Contracts.DurableEffect`, `Contracts.DurableTransaction`, `Contracts.Reconcile`,
+> `Contracts.Roblox.ProfileStore`, `Contracts.loadProfile`,
+> `Contracts.durableTransaction`) is available for early integration and may gain
+> fields or methods before promotion.
+
+A durable write persists to an external, session-locked store (a DataStore via
+`ProfileStore`, or any object implementing the `DurableStore` interface) as part
+of the same transaction as in-memory writes. It is **transactional by default,
+exactly like `scope:write`**: it is staged and applied only at the commit
+boundary, and it rolls back (compensates) if a later step fails. There is no
+eager durable write — a partial currency or inventory write is the footgun this
+layer exists to prevent.
+
+### The injected store seam
+
+Core durable modules never touch `DataStoreService`. They take an injected
+`DurableStore` and duck-type it, so they are unit-testable with an in-memory
+fake. `src/Roblox/ProfileStore.lua` is the adapter that implements the interface
+over a real DataStore-like object.
+
+```
+store:load(key)              -> Result  -- yields; { ok, name, value, lock } / { ok=false, name="SessionLockUnavailable" }
+store:save(key, value, lock) -> Result  -- yields; verifies the lock; { ok } / { ok=false, name=... }
+store:release(key, lock)     -> Result  -- yields; releases the session lock
+store:owns(key, lock)        -> boolean -- non-yielding ownership check
+```
+
+The `lock` is an opaque token. The core never inspects it; it only passes it back
+to `save`, `release`, and `owns`. Locking and storage are one object (mirroring
+how a `LifecycleSession` hands back a `revision`).
+
+### Loading a session-locked profile
+
+```lua
+local store = Contracts.Roblox.ProfileStore.new(dataStore) -- adapter (or a fake in tests)
+
+runtime:implement("GrantItem", function(scope)
+    local loaded = Contracts.loadProfile(store, "Player_" .. scope:actor().UserId)
+    if not loaded.ok then
+        error(loaded) -- SessionLockUnavailable -> the action fails, nothing is written
+    end
+    local profile = loaded.profile
+
+    local item = scope:payload().ItemId
+    scope:writeDurable("Player.Profile", profile, function(data)
+        data.inventory[item] = true
+        return data
+    end) -- staged: persists only at commit, compensates on failure
+
+    return { granted = true, itemId = item }
+end)
+```
+
+`Contracts.loadProfile(store, key, options?)` (alias `DurableProfile.load`) yields
+through `store:load`, acquires the session lock, and returns
+`{ ok = true, name = "DurableProfileLoaded", profile = <handle> }`, or
+`{ ok = false, name = "SessionLockUnavailable", ... }` when another server holds
+the lock. The handle exposes `:value()`, `:set(value)`, `:key()`, `:lock()`,
+`:store()`, `:released()`, and `:release()`.
+
+`scope:writeDurable(targetPath, profile, valueOrTransform)` goes through the same
+`write` permission gate as `scope:write` (an undeclared durable path still fails
+`WriteNotAllowed`). It snapshots the profile's current value as the compensating
+rollback target, computes the new value (a plain value or a `transform(previous)`),
+calls `profile:set`, and stages an ordinary `kind = "write"` effect. Because it is
+a normal staged write, it commits at the boundary, rolls back on failure, is
+visible to postconditions through `context.effects`, and participates with
+in-memory writes in one all-or-nothing transaction.
+
+### Atomic Multi-Profile Transactions (Trades)
+
+A trade touches two locked profiles at once: remove an item from player A and add
+it to player B. `Contracts.durableTransaction(store)` (alias
+`DurableTransaction.new`) is a thin load coordinator for this case. It does **no
+commit or rollback of its own** — each profile is written with
+`scope:writeDurable`, and the transactional behaviour falls straight out of the
+effect plan: staged writes commit in order (A then B) and compensate in reverse,
+so under a normal single commit failure (B's save fails) A's durable rollback
+restores it — the trade is all-or-nothing. The one caveat is a *compensating
+rollback that itself fails*; see [Partial failure](#partial-failure-no-two-phase-commit)
+below.
+
+```lua
+runtime:implement("Trade", function(scope)
+    local txn = Contracts.durableTransaction(store)
+    local from = txn:load("Player_" .. scope:payload().FromId)
+    local to = txn:load("Player_" .. scope:payload().ToId)
+    if not txn:ok() then
+        txn:release(scope:diagnostics()) -- free the lock(s) we did grab, then abort
+        error(txn:firstFailure())        -- SessionLockUnavailable -> nothing written
+    end
+
+    local item = scope:payload().ItemId
+    scope:writeDurable("Player.Profile", from.profile, function(d)
+        d.inventory[item] = nil
+        return d
+    end)
+    scope:writeDurable("Player.Profile", to.profile, function(d)
+        d.inventory[item] = true
+        return d
+    end)
+    return { traded = true } -- commit A then B; if B fails, B's failure rolls A back
+end)
+```
+
+What the coordinator adds is the bookkeeping around **partial acquisition**.
+Loading N profiles means acquiring N session locks, one yielding `store:load` at a
+time; if the second lock is unavailable, the first is already held. The
+transaction remembers every acquired handle and the first failure:
+
+- `txn:load(key, options?)` loads one more profile (same shape as
+  `Contracts.loadProfile`) and remembers it. Once a load has failed, later `load`
+  calls short-circuit and return **that first failure verbatim** rather than
+  grabbing more locks the action is about to release — so a caller that inspects
+  the Result of a later `load` sees the original failure's name/reason, not a
+  fresh result for that key. Use `txn:ok()` to gate, not the individual Results.
+- `txn:ok()` is `true` only while every load has succeeded; `txn:firstFailure()`
+  returns the first failing load `Result` (e.g. `SessionLockUnavailable`).
+- `txn:profiles()` returns the loaded handles in load order.
+- `txn:release(diagnostics?)` frees **every** lock the transaction acquired — the
+  abort handler for a half-acquired trade, so the locks it did grab are not
+  stranded. It is idempotent. When the transaction is in a failed state it also
+  records the `DurableTransactionAborted` rollup (the multi-profile analogue of
+  `ActionEagerEffectsNotRolledBack`).
+
+There is no separate atomicity machinery: a trade is just two `scope:writeDurable`
+calls in one action, and the effect plan already commits them together or rolls
+them back together under a normal commit failure.
+
+### Partial failure (no two-phase commit)
+
+A trade spans **two independent DataStore keys**, and Roblox DataStores offer no
+cross-key two-phase commit. The effect plan gives a saga (ordered commit, reverse
+compensation), not 2PC. Under a normal single commit failure this is fully
+all-or-nothing: if B's save fails, only A committed, and A's compensating rollback
+restores it. The gap is when **a compensating rollback itself fails** — recorded
+as `ActionRollbackFailed` together with `SessionLockLost` on a durable effect.
+Because the compensation is a second DataStore write that can lose its session
+lock across its own yield, it can fail closed (it will not overwrite another
+server's value), and the trade is then left **non-atomic**:
+
+- **Item loss (the common case):** A's removal commits, B's add fails, and A's
+  rollback (re-adding the item to A) then fails closed — the item is in *neither*
+  inventory.
+- **Item duplication (the rare case):** both durable saves commit, then a *later*
+  step fails — most plausibly a lifecycle `session:apply` after both saves — and
+  one profile's compensating rollback fails closed while the other succeeds, so
+  the item ends up in *both* inventories.
+
+This is an accepted, documented limitation, the same trade-off ProfileService and
+Lapis make: without 2PC across DataStore keys, a failed compensation cannot be
+undone in-band. **Treat an `ActionRollbackFailed` diagnostic on a durable effect
+as a reconciliation signal** — log the affected keys and reconcile out of band
+(e.g. a scheduled audit that re-derives inventories from an authoritative ledger,
+or an operator tool). It is rare (it requires a lock loss *during compensation*),
+but it is real, so design the reconciliation path rather than assuming the trade
+can never be torn.
+
+### Reconcile and Migration
+
+Stored profiles drift from the code that reads them: a player who has not logged
+in since before a field was added has a record missing that field, and an old
+record may use a stale shape. `Reconcile` is the schema-reconciliation layer that
+runs **on load**, before the handle is returned, so handler code always sees a
+current, fully-populated profile. It is driven by two options on
+`Contracts.loadProfile(store, key, options?)`:
+
+```lua
+local PROFILE_TEMPLATE = {
+    schemaVersion = 0,
+    coins = 0,
+    inventory = {},
+    settings = { music = true, sfx = true },
+}
+
+local MIGRATIONS = {
+    function(data) -- v0 -> v1
+        data.coins = data.coins or 0
+        return data
+    end,
+    function(data) -- v1 -> v2
+        data.inventory = data.inventory or {}
+        return data
+    end,
+}
+
+local loaded = Contracts.loadProfile(store, key, {
+    template = PROFILE_TEMPLATE,
+    migrations = MIGRATIONS,
+})
+```
+
+After `store:load` succeeds, the load applies (in this order):
+
+- **Template fill** — `Reconcile.fill(data, template)` deep-fills keys present in
+  the template but missing from the loaded record, recursing into nested tables.
+  It **never clobbers** an existing value, and table defaults are deep-copied so a
+  profile never aliases the shared template. It returns the same data table.
+- **Ordered migrations** — `Reconcile.migrate(data, migrations, options?)` reads
+  `data.schemaVersion` (default `0`) and runs `migrations[v + 1 .. #migrations]`
+  in order; each migration is a `function(data) -> data`. It stamps
+  `data.schemaVersion = #migrations` and returns `Result.ok(data)`. Loading a
+  record already at the latest version runs **zero** steps (idempotent), and a
+  partially-migrated record runs only the remaining steps.
+
+Both functions are pure (plain tables, no store) and usable on their own:
+
+```lua
+local data = Contracts.Reconcile.fill(stored, PROFILE_TEMPLATE)
+local result = Contracts.Reconcile.migrate(data, MIGRATIONS)
+if result.ok then
+    print(result.value.schemaVersion)
+end
+```
+
+If any migration step throws, the load **fails** with a `ProfileMigrationFailed`
+Result (`{ ok = false, name = "ProfileMigrationFailed", reason, fromVersion, atStep }`)
+and the session lock that was just acquired is **released** before returning, so a
+rejected migration never strands the lock. Because reconciliation runs inside
+`Contracts.loadProfile`, a failed migration surfaces exactly like
+`SessionLockUnavailable`: the load Result is not ok, so the handler should
+`error(loaded)` and the action fails before anything is staged.
+
+### Concurrency: the lock is re-verified across the save yield
+
+A DataStore save yields, and Roblox switches threads only at a yield, so another
+server could take the session lock while the save is in flight. This is the
+persistence analogue of the lifecycle revision re-check
+([Lifecycle Sessions](#lifecycle-sessions) and `LifecycleStaleRevision`): the
+durable commit re-verifies ownership before the save (a pre-yield `store:owns`
+guard) and again through `store:save`, and **fails closed with `SessionLockLost`
+rather than double-committing**. The compensating rollback value is captured at
+stage time, never re-read at rollback (which would yield again). Durable actions
+yield, so they should be declared `async` (see [Async Actions](#async-actions)).
+
+### Diagnostics
+
+When a durable effect fails at the commit boundary, the SDK records the durable
+diagnostic at error level (beside the rollback report), the same way it surfaces
+`ActionEagerEffectsNotRolledBack`:
+
+| Name | Raised when |
+| --- | --- |
+| `SessionLockUnavailable` | `DurableProfile.load` / `store:load` could not acquire the session lock |
+| `SessionLockLost` | the lock was lost across a yield, detected at commit or rollback; fails closed |
+| `DurableCommitFailed` | `store:save` returned a non-lock failure at commit |
+| `DurableTransactionAborted` | `DurableTransaction:release` freed already-acquired locks after a failed load (e.g. one of several profiles was locked) |
+| `ProfileMigrationFailed` | a `Reconcile.migrate` step threw while loading a profile (`options.migrations`); the load fails and releases the freshly acquired lock |
+
 ## Runtime
 
 `Runtime` is the recommended execution boundary for application code. It keeps

@@ -17,6 +17,12 @@ On an action `scope`, the mutating helpers are **staged/transactional by default
   when a write genuinely cannot be deferred.
 - `scope:stageWrite|stageCreate|stageDestroy|stageTouch|stageEffect` are deprecated
   aliases of the matching `write`/`create`/… calls. Prefer the short names.
+- `scope:writeDurable(path, profile, valueOrTransform)` (experimental) persists to a
+  session-locked external store loaded via `Contracts.loadProfile(store, key)`. It is
+  staged like `scope:write` — never eager — and compensates on failure. The session
+  lock is re-verified across the save yield and **fails closed** (`SessionLockLost`)
+  instead of double-committing, mirroring the lifecycle revision re-check. Core takes
+  an injected `DurableStore`; `Contracts.Roblox.ProfileStore` is the DataStore adapter.
 
 Do not "fix" `scope:write` to run eagerly — that reintroduces the partial-write
 footgun this API exists to prevent. Note `scope:write(path, fn)` stages `fn` and

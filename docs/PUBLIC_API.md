@@ -89,6 +89,31 @@ release notes before they are promoted to stable.
 - `Contracts.StaticScanner`
 - `Contracts.Studio`
 - `Contracts.Test`
+- `Contracts.DurableEffect`
+- `Contracts.DurableProfile`
+- `Contracts.DurableTransaction`
+- `Contracts.Reconcile`
+
+Experimental convenience constructors:
+
+- `Contracts.loadProfile(store, key, options)` (alias of `DurableProfile.load`)
+- `Contracts.durableTransaction(store)` (alias of `DurableTransaction.new`) — a
+  load coordinator for multi-profile transactions (trades); writes go through
+  `scope:writeDurable`, so the saga (ordered commit, reverse compensation) comes
+  from the effect plan. It is all-or-nothing under a normal commit failure, but a
+  trade spans two DataStore keys with no two-phase commit: a failed *compensation*
+  can leave it non-atomic. See
+  [API: Partial failure](API.md#partial-failure-no-two-phase-commit).
+
+The durable persistence modules take an injected `DurableStore` (load / save /
+release / owns) as their seam; `Contracts.Roblox.ProfileStore.new(dataStore)` is
+the Roblox adapter that implements it over a DataStore-like object, and tests
+supply an in-memory fake. `Contracts.Reconcile` is the pure schema-reconciliation
+layer (`fill(data, template)` deep-fills defaults; `migrate(data, migrations)` runs
+ordered schema migrations); it activates through the `template` / `migrations`
+options on `Contracts.loadProfile`. See
+[API: Durable Persistence](API.md#durable-persistence) and
+[API: Reconcile and Migration](API.md#reconcile-and-migration).
 
 The same entries are grouped under `Contracts.Experimental`.
 
