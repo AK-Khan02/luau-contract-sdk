@@ -1,9 +1,9 @@
 --!nonstrict
 
 local Contracts = require("../../src/Contracts")
-local ProfileStore = Contracts.Roblox.ProfileStore
+local DurableDataStore = Contracts.Roblox.DurableDataStore
 
--- Fake DataStore exposing the minimal UpdateAsync/GetAsync surface ProfileStore
+-- Fake DataStore exposing the minimal UpdateAsync/GetAsync surface DurableDataStore
 -- needs, with REAL UpdateAsync semantics: the transform receives the current
 -- value, and returning nil cancels the write (UpdateAsync then yields the
 -- unchanged value). This lets the suite exercise the real adapter's session-lock
@@ -47,18 +47,18 @@ return function(test)
 		test:check(name, condition)
 	end
 
-	test:section("ProfileStoreAdapter")
+	test:section("DurableDataStoreAdapter")
 
 	-- new() rejects a non-DataStore with a clear message.
-	test:expectError("new rejects a non-DataStore", "ProfileStore needs a DataStore", function()
-		ProfileStore.new(nil)
+	test:expectError("new rejects a non-DataStore", "DurableDataStore needs a DataStore", function()
+		DurableDataStore.new(nil)
 	end)
 
 	-- Round-trip: load claims the lock, save persists, release frees it.
 	do
 		local ds = newDataStore()
 		seedReleased(ds, "Player_1", { coins = 5 })
-		local server = ProfileStore.new(ds, { jobId = "A" })
+		local server = DurableDataStore.new(ds, { jobId = "A" })
 
 		local loaded = server:load("Player_1")
 		check("load claims the lock", loaded.ok == true and loaded.name == "DurableLoaded")
@@ -77,8 +77,8 @@ return function(test)
 	do
 		local ds = newDataStore()
 		seedReleased(ds, "Player_1", { coins = 5 })
-		local serverA = ProfileStore.new(ds, { jobId = "A" })
-		local serverB = ProfileStore.new(ds, { jobId = "B" })
+		local serverA = DurableDataStore.new(ds, { jobId = "A" })
+		local serverB = DurableDataStore.new(ds, { jobId = "B" })
 
 		local a = serverA:load("Player_1")
 		check("first server loads", a.ok == true)
@@ -99,7 +99,7 @@ return function(test)
 	do
 		local ds = newDataStore()
 		seedReleased(ds, "Player_1", { coins = 5 })
-		local server = ProfileStore.new(ds, { jobId = "A" })
+		local server = DurableDataStore.new(ds, { jobId = "A" })
 
 		local loaded = server:load("Player_1")
 		check("stale-save setup loads", loaded.ok == true)
@@ -119,7 +119,7 @@ return function(test)
 	do
 		local ds = newDataStore()
 		seedReleased(ds, "Player_1", { coins = 5 })
-		local server = ProfileStore.new(ds, { jobId = "A" })
+		local server = DurableDataStore.new(ds, { jobId = "A" })
 		local loaded = server:load("Player_1")
 
 		seedLockedBy(ds, "Player_1", "ServerB-lock", { coins = 500 })
@@ -134,7 +134,7 @@ return function(test)
 	do
 		local ds = newDataStore()
 		seedLockedBy(ds, "Player_1", "StaleServer", { coins = 7 })
-		local server = ProfileStore.new(ds, { jobId = "A", lockTimeoutSeconds = 1 })
+		local server = DurableDataStore.new(ds, { jobId = "A", lockTimeoutSeconds = 1 })
 
 		local loaded = server:load("Player_1")
 		check("expired lock is reclaimable", loaded.ok == true and loaded.value ~= nil and loaded.value.coins == 7)

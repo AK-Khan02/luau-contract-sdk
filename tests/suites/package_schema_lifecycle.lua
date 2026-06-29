@@ -38,7 +38,8 @@ return function(test)
 			and Contracts.Experimental.durableTransaction == Contracts.durableTransaction
 			and Contracts.Experimental.Reconcile == Contracts.Reconcile
 	)
-	check("package exposes ProfileStore adapter", Contracts.Roblox.ProfileStore ~= nil)
+	check("package exposes DurableDataStore adapter", Contracts.Roblox.DurableDataStore ~= nil)
+	check("package exposes ProfileSessionStore adapter", Contracts.Roblox.ProfileSessionStore ~= nil)
 	local function experimentalLists(name)
 		for _, entry in ipairs(Contracts.publicApi.experimental) do
 			if entry == name then

@@ -3,7 +3,7 @@
 local Contracts = require("../../src/Contracts")
 
 -- Inline in-memory DurableStore fake. No DataStoreService: a map of values plus a
--- lock registry, mirroring the real ProfileStore session-lock semantics so the
+-- lock registry, mirroring the real DurableDataStore session-lock semantics so the
 -- suite runs as pure Luau outside Studio.
 local function deepCopy(value)
 	if type(value) ~= "table" then

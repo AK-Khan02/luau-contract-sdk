@@ -1,6 +1,6 @@
 --!strict
 
--- ProfileStore is the Roblox adapter that implements the injected `DurableStore`
+-- DurableDataStore is the Roblox adapter that implements the injected `DurableStore`
 -- interface (load / save / release / owns) over a DataStore-like object. The
 -- core modules (DurableEffect, DurableProfile) never see this file: they take an
 -- injected store and duck-type it, and tests supply an in-memory fake. This
@@ -19,8 +19,8 @@
 local Result = require("../Core/Result")
 local PlayersService = require("./PlayersService")
 
-local ProfileStore: any = {}
-ProfileStore.__index = ProfileStore
+local DurableDataStore: any = {}
+DurableDataStore.__index = DurableDataStore
 
 local LOCK_UNAVAILABLE = "SessionLockUnavailable"
 local LOCK_LOST = "SessionLockLost"
@@ -57,9 +57,12 @@ local function isDataStore(dataStore: any): boolean
 		and type(dataStore.GetAsync) == "function"
 end
 
-function ProfileStore.new(dataStore: any, options: any?): any
+function DurableDataStore.new(dataStore: any, options: any?): any
 	if not isDataStore(dataStore) then
-		error("ProfileStore needs a DataStore; pass dataStore (a DataStore-like object with UpdateAsync/GetAsync)", 2)
+		error(
+			"DurableDataStore needs a DataStore; pass dataStore (a DataStore-like object with UpdateAsync/GetAsync)",
+			2
+		)
 	end
 
 	local config = options or {}
@@ -69,7 +72,7 @@ function ProfileStore.new(dataStore: any, options: any?): any
 		_jobId = config.jobId or PlayersService.jobId(),
 		_locks = {},
 		_lockTimeoutSeconds = config.lockTimeoutSeconds or 0,
-	}, ProfileStore)
+	}, DurableDataStore)
 end
 
 local function envelopeValue(envelope: any): any
@@ -89,7 +92,7 @@ local function lockHeld(envelope: any, now: number, timeout: number): boolean
 	return true
 end
 
-function ProfileStore.load(self: any, key: string): any
+function DurableDataStore.load(self: any, key: string): any
 	local updateAsync = self._dataStore.UpdateAsync :: (any, string, (any) -> any) -> (any, any)
 	local now = clock()
 	local lockId = newLockId(self._jobId)
@@ -138,14 +141,14 @@ function ProfileStore.load(self: any, key: string): any
 	})
 end
 
-function ProfileStore.owns(self: any, key: string, lock: any): boolean
+function DurableDataStore.owns(self: any, key: string, lock: any): boolean
 	if type(lock) ~= "table" or lock.lockId == nil then
 		return false
 	end
 	return self._locks[key] == lock.lockId
 end
 
-function ProfileStore.save(self: any, key: string, value: any, lock: any): any
+function DurableDataStore.save(self: any, key: string, value: any, lock: any): any
 	if not self:owns(key, lock) then
 		return Result.fail(LOCK_LOST, "session lock no longer held for " .. key, {
 			key = key,
@@ -190,7 +193,7 @@ function ProfileStore.save(self: any, key: string, value: any, lock: any): any
 	})
 end
 
-function ProfileStore.release(self: any, key: string, lock: any): any
+function DurableDataStore.release(self: any, key: string, lock: any): any
 	if not self:owns(key, lock) then
 		-- Releasing a lock we no longer hold is a no-op success: the goal (we are
 		-- not holding it) is already met.
@@ -229,4 +232,4 @@ function ProfileStore.release(self: any, key: string, lock: any): any
 	})
 end
 
-return ProfileStore
+return DurableDataStore

@@ -9,13 +9,14 @@ local function load(primaryPath, fallbackPath)
 end
 
 return {
+	DurableDataStore = load("./DurableDataStore", "./Roblox/DurableDataStore"),
 	GuardRemote = load("./GuardRemote", "./Roblox/GuardRemote"),
 	Ownership = load("./Ownership", "./Roblox/Ownership"),
 	OverlayState = load("./OverlayState", "./Roblox/OverlayState"),
 	PlayerCancellation = load("./PlayerCancellation", "./Roblox/PlayerCancellation"),
 	PlayersService = load("./PlayersService", "./Roblox/PlayersService"),
 	PostconditionRunner = load("./PostconditionRunner", "./Roblox/PostconditionRunner"),
-	ProfileStore = load("./ProfileStore", "./Roblox/ProfileStore"),
+	ProfileSessionStore = load("./ProfileSessionStore", "./Roblox/ProfileSessionStore"),
 	RelayPublisher = load("./RelayPublisher", "./Roblox/RelayPublisher"),
 	RemoteGuard = load("./RemoteGuard", "./Roblox/RemoteGuard"),
 	StudioBridgePublisher = load("./StudioBridgePublisher", "./Roblox/StudioBridgePublisher"),
