@@ -383,13 +383,14 @@ Common statuses are `planned`, `committed`, `rolledBack`, `failed`,
 
 > **Experimental.** The durable persistence layer (`Contracts.DurableProfile`,
 > `Contracts.DurableEffect`, `Contracts.DurableTransaction`, `Contracts.Reconcile`,
-> `Contracts.Roblox.ProfileStore`, `Contracts.loadProfile`,
-> `Contracts.durableTransaction`) is available for early integration and may gain
-> fields or methods before promotion.
+> `Contracts.Roblox.ProfileSessionStore`, `Contracts.Roblox.DurableDataStore`,
+> `Contracts.loadProfile`, `Contracts.durableTransaction`) is available for early
+> integration and may gain fields or methods before promotion.
 
-A durable write persists to an external, session-locked store (a DataStore via
-`ProfileStore`, or any object implementing the `DurableStore` interface) as part
-of the same transaction as in-memory writes. It is **transactional by default,
+A durable write persists to an external, session-locked store (your existing
+ProfileService/ProfileStore via `ProfileSessionStore`, a raw DataStore via
+`DurableDataStore`, or any object implementing the `DurableStore` interface) as
+part of the same transaction as in-memory writes. It is **transactional by default,
 exactly like `scope:write`**: it is staged and applied only at the commit
 boundary, and it rolls back (compensates) if a later step fails. There is no
 eager durable write — a partial currency or inventory write is the footgun this
@@ -398,9 +399,20 @@ layer exists to prevent.
 ### The injected store seam
 
 Core durable modules never touch `DataStoreService`. They take an injected
-`DurableStore` and duck-type it, so they are unit-testable with an in-memory
-fake. `src/Roblox/ProfileStore.lua` is the adapter that implements the interface
-over a real DataStore-like object.
+`DurableStore` and duck-type it, so they are unit-testable with an in-memory fake.
+Two Roblox adapters implement the interface:
+
+- **`ProfileSessionStore` (recommended)** — layers on the data library you already
+  trust. It delegates session locking and persistence to ProfileService
+  (`LoadProfileAsync`) or its successor ProfileStore (`StartSessionAsync`): there is
+  nothing to swap, the SDK uses that library's session as the lock and adds the
+  transactional / trade / contract envelope on top. Saves ride the library's batched
+  autosave, so they are rate-limit-safe — not one DataStore write per action. If that
+  library already reconciles (both expose `:Reconcile()`), rely on it and skip the
+  SDK's `template` / `migrations` options — they are optional.
+- **`DurableDataStore` (zero-dependency fallback)** — a self-contained adapter over a
+  raw DataStore-like object, with session locking via an `UpdateAsync` compare-and-set.
+  Use it when you are not already on a profile-session library.
 
 ```
 store:load(key)              -> Result  -- yields; { ok, name, value, lock } / { ok=false, name="SessionLockUnavailable" }
@@ -416,7 +428,10 @@ how a `LifecycleSession` hands back a `revision`).
 ### Loading a session-locked profile
 
 ```lua
-local store = Contracts.Roblox.ProfileStore.new(dataStore) -- adapter (or a fake in tests)
+-- Recommended: layer on your existing ProfileService / ProfileStore session.
+local store = Contracts.Roblox.ProfileSessionStore.new(profileStore)
+-- Zero-dependency fallback over a raw DataStore:
+-- local store = Contracts.Roblox.DurableDataStore.new(dataStore)
 
 runtime:implement("GrantItem", function(scope)
     local loaded = Contracts.loadProfile(store, "Player_" .. scope:actor().UserId)

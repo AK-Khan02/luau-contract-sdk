@@ -106,9 +106,10 @@ Experimental convenience constructors:
   [API: Partial failure](API.md#partial-failure-no-two-phase-commit).
 
 The durable persistence modules take an injected `DurableStore` (load / save /
-release / owns) as their seam; `Contracts.Roblox.ProfileStore.new(dataStore)` is
-the Roblox adapter that implements it over a DataStore-like object, and tests
-supply an in-memory fake. `Contracts.Reconcile` is the pure schema-reconciliation
+release / owns) as their seam. `Contracts.Roblox.ProfileSessionStore.new(profileStore)`
+is the recommended adapter — it delegates to your existing ProfileService/ProfileStore
+session — and `Contracts.Roblox.DurableDataStore.new(dataStore)` is the
+zero-dependency adapter over a raw DataStore; tests supply an in-memory fake. `Contracts.Reconcile` is the pure schema-reconciliation
 layer (`fill(data, template)` deep-fills defaults; `migrate(data, migrations)` runs
 ordered schema migrations); it activates through the `template` / `migrations`
 options on `Contracts.loadProfile`. See
